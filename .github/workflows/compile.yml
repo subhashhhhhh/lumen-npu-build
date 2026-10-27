@@ -49,6 +49,7 @@ jobs:
           find out -type d -empty -delete
       # Release files, not artifacts: artifact downloads crawl (~200 KB/s) from India, release files don't.
       - name: Publish to compiled-<chip> releases
+        if: ${{ !inputs.huggingface }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

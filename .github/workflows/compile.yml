@@ -41,9 +41,12 @@ jobs:
         run: |
           for soc in ${{ inputs.socs }}; do
             for model in ${{ inputs.models }}; do
-              python compile.py "in/$model.tflite" "$soc" "out/$soc" || echo "::warning::$model failed for $soc"
+              # A failed compile can leave an empty file behind; drop it so nothing half-made is published.
+              python compile.py "in/$model.tflite" "$soc" "out/$soc" || { echo "::warning::$model failed for $soc"; rm -f "out/$soc/${model}_"*; }
             done
           done
+          find out -type f -empty -delete
+          find out -type d -empty -delete
       # Release files, not artifacts: artifact downloads crawl (~200 KB/s) from India, release files don't.
       - name: Publish to compiled-<chip> releases
         env:

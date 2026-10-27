@@ -64,12 +64,15 @@ jobs:
         env:
           HF_TOKEN: ${{ secrets.HF_TOKEN }}
         run: |
+          rm -rf in
           pip install --quiet huggingface_hub
           mkdir hf
+          df -h /
           for dir in out/*/; do
             soc=$(basename "$dir"); mkdir "hf/$soc"
             for f in "$dir"*.tflite; do
-              name=$(basename "$f"); cp "$f" "hf/$soc/${name%%_Qualcomm_*}.tflite"
+              # Moved, not copied: 40 chips' models are ~8 GB, more than the runner has twice over.
+              name=$(basename "$f"); mv "$f" "hf/$soc/${name%%_Qualcomm_*}.tflite"
             done
           done
           ls -R hf | head -40

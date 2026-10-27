@@ -17,14 +17,19 @@ jobs:
         soc: ${{ fromJSON(inputs.socs) }}
         model: ${{ fromJSON(inputs.models) }}
     steps:
+      - name: Free disk space (Qualcomm's SDK is several GB)
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+          df -h /
       - uses: actions/checkout@v4
       - uses: actions/setup-python@v5
         with:
           python-version: "3.11"
-      - run: pip install ai-edge-litert==2.3.0 ai-edge-litert-sdk-qualcomm==2.3.0
+      - run: pip install --no-cache-dir ai-edge-litert==2.3.0 ai-edge-litert-sdk-qualcomm==2.3.0
       - run: gh release download inputs --pattern "${{ matrix.model }}.tflite" --dir in
         env:
           GH_TOKEN: ${{ github.token }}
+      - run: df -h / && du -sh $(python -c 'import site;print(site.getsitepackages()[0])')
       - run: python compile.py "in/${{ matrix.model }}.tflite" "${{ matrix.soc }}" out
       - uses: actions/upload-artifact@v4
         with:

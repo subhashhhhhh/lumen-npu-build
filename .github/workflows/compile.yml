@@ -8,6 +8,8 @@ on:
       models:
         description: Models in the inputs release, as a JSON list
         default: '["siglip_visual","ocr_det","ocr_rec"]'
+permissions:
+  contents: write
 jobs:
   compile:
     runs-on: ubuntu-22.04
@@ -31,8 +33,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
       - run: df -h / && du -sh $(python -c 'import site;print(site.getsitepackages()[0])')
       - run: python compile.py "in/${{ matrix.model }}.tflite" "${{ matrix.soc }}" out
-      - uses: actions/upload-artifact@v4
-        with:
-          name: ${{ matrix.model }}-${{ matrix.soc }}
-          path: out/
-          compression-level: 0
+      # A release, not an artifact: artifact downloads crawl (~200 KB/s) from India, release files don't.
+      - name: Publish to the compiled-<chip> release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release view "compiled-${{ matrix.soc }}" >/dev/null 2>&1 || gh release create "compiled-${{ matrix.soc }}" --title "compiled-${{ matrix.soc }}" --notes "Models compiled ahead of time for ${{ matrix.soc }}." || true
+          for f in out/*.tflite; do gh release upload "compiled-${{ matrix.soc }}" "$f" --clobber; done

@@ -7,7 +7,11 @@ on:
         default: SM4250 SM4350 SM4375 SM4450 SM4635 SM6115 SM6125 SM6150 SM6225 SM6250 SM6350 SM6375 SM6450 SM6450Q SM6475 SM6650 SM7150 SM7225 SM7250 SM7315 SM7325 SM7350 SM7435 SM7450 SM7475 SM7550 SM7635 SM7675 SM7750 SM8325 SM8350 SM8350P SM8450 SM8475 SM8550 SM8635 SM8650 SM8735 SM8750 SM8845 SM8845P SM8850
       models:
         description: Models in the inputs release, space separated
-        default: siglip_visual ocr_det ocr_rec
+        default: siglip_visual ocr_det
+      huggingface:
+        description: Also upload to huggingface.co/subhashhhhhh/lumen-npu
+        type: boolean
+        default: false
 permissions:
   contents: write
 jobs:
@@ -50,3 +54,19 @@ jobs:
             gh release view "compiled-$soc" >/dev/null 2>&1 || gh release create "compiled-$soc" --title "compiled-$soc" --notes "Models compiled ahead of time for $soc."
             gh release upload "compiled-$soc" "$dir"*.tflite --clobber
           done
+      # <chip>/<model>.tflite in the public model repo Lumen downloads from.
+      - name: Upload to Hugging Face
+        if: inputs.huggingface
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: |
+          pip install --quiet huggingface_hub
+          mkdir hf
+          for dir in out/*/; do
+            soc=$(basename "$dir"); mkdir "hf/$soc"
+            for f in "$dir"*.tflite; do
+              name=$(basename "$f"); cp "$f" "hf/$soc/${name%%_Qualcomm_*}.tflite"
+            done
+          done
+          ls -R hf | head -40
+          hf upload subhashhhhhh/lumen-npu hf . --commit-message "Compile ${{ inputs.models }} for ${{ inputs.socs }} (run ${{ github.run_id }})"

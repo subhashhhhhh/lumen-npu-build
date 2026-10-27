@@ -1,0 +1,33 @@
+name: Compile for Qualcomm NPUs
+on:
+  workflow_dispatch:
+    inputs:
+      socs:
+        description: Chips, as a JSON list
+        default: '["SM7450","SM8450","SM8475","SM8550","SM8650","SM8750","SM7475","SM7550"]'
+      models:
+        description: Models in the inputs release, as a JSON list
+        default: '["siglip_visual","ocr_det","ocr_rec"]'
+jobs:
+  compile:
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        soc: ${{ fromJSON(inputs.socs) }}
+        model: ${{ fromJSON(inputs.models) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install ai-edge-litert==2.3.0 ai-edge-litert-sdk-qualcomm==2.3.0
+      - run: gh release download inputs --pattern "${{ matrix.model }}.tflite" --dir in
+        env:
+          GH_TOKEN: ${{ github.token }}
+      - run: python compile.py "in/${{ matrix.model }}.tflite" "${{ matrix.soc }}" out
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.model }}-${{ matrix.soc }}
+          path: out/
+          compression-level: 0

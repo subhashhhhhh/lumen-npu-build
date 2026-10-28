@@ -24,6 +24,8 @@ except ValueError as e:
     import re
     m = re.search(r"See (\S+\.error)", str(e))
     if m and os.path.exists(m.group(1)):
+        import shutil
+        shutil.copy(m.group(1), out / (pathlib.Path(model).stem + "_" + chip + ".error"))
         print("---- compiler error ----")
         lines = open(m.group(1), errors="replace").read().splitlines()
         # The cause: errors, else the tiler's "unable to tile" lines (the many tiling.h warnings are noise).

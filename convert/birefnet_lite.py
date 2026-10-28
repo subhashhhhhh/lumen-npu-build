@@ -49,6 +49,9 @@ if Student:
 sys.path.insert(0, __import__("os").path.dirname(__file__))
 import birefnet_npu_rewrites
 birefnet_npu_rewrites.apply(model)
+# The decoder's 960-3072-channel convolutions as input-channel slices (exact): their weights fit the
+# Snapdragon 7 Gen 1 / 8 Gen 1 NPU's on-chip memory.
+print("split convolutions:", birefnet_npu_rewrites.split_wide_convs(model), flush=True)
 
 
 class Wrapped(torch.nn.Module):

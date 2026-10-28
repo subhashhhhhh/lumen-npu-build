@@ -98,4 +98,7 @@ def apply(model):
     module.window_reverse = window_reverse
     module.image2patches = image2patches
     type(next(m for m in model.modules() if type(m).__name__ == "WindowAttention")).forward = attention_forward
-    type(next(m for m in model.modules() if type(m).__name__ == "DeformableConv2d")).forward = deformable_forward
+    # The distilled student has no deformable convolutions left (plain ones instead): nothing to swap.
+    deform = next((m for m in model.modules() if type(m).__name__ == "DeformableConv2d"), None)
+    if deform is not None:
+        type(deform).forward = deformable_forward

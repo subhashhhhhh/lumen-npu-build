@@ -101,7 +101,53 @@ class Full(nn.Module):
     def forward(self, x):
         return self.m(x)[-1]
 
+class Cut(nn.Module):
+    """The model up to a point: 'sq' (encoder + squeeze), 'p4'..'p2' (after that decoder stage),
+    'p1' (decoder_block1, before the last upsampling), 'out' (everything)."""
+    def __init__(self, m, stop):
+        super().__init__(); self.m, self.stop = m, stop
+
+    def forward(self, x):
+        m, d = self.m, self.m.decoder
+        mod = sys.modules[type(m).__module__]
+        (x1, x2, x3, x4), _ = m.forward_enc(x)
+        if m.config.squeeze_block:
+            x4 = m.squeeze_module(x4)
+        if self.stop == "sq": return x4
+
+        def ipt(blk, ref, size):
+            pb = mod.image2patches(x, patch_ref=ref, transformation='b c (hg h) (wg w) -> b (c hg wg) h w') if d.split else x
+            return blk(F.interpolate(pb, size=size, mode='bilinear', align_corners=True))
+
+        def stage(p, block, gdt, attn):
+            p = block(p)
+            if d.config.out_ref:
+                p = p * attn(gdt(p)).sigmoid()
+            return p
+
+        if d.config.dec_ipt: x4 = torch.cat((x4, ipt(d.ipt_blk5, x4, x4.shape[2:])), 1)
+        p4 = stage(x4, d.decoder_block4, d.gdt_convs_4, d.gdt_convs_attn_4)
+        if self.stop == "p4": return p4
+        p3 = F.interpolate(p4, size=x3.shape[2:], mode='bilinear', align_corners=True) + d.lateral_block4(x3)
+        if d.config.dec_ipt: p3 = torch.cat((p3, ipt(d.ipt_blk4, p3, x3.shape[2:])), 1)
+        p3 = stage(p3, d.decoder_block3, d.gdt_convs_3, d.gdt_convs_attn_3)
+        if self.stop == "p3": return p3
+        p2 = F.interpolate(p3, size=x2.shape[2:], mode='bilinear', align_corners=True) + d.lateral_block3(x2)
+        if d.config.dec_ipt: p2 = torch.cat((p2, ipt(d.ipt_blk3, p2, x2.shape[2:])), 1)
+        p2 = stage(p2, d.decoder_block2, d.gdt_convs_2, d.gdt_convs_attn_2)
+        if self.stop == "p2": return p2
+        p1 = F.interpolate(p2, size=x1.shape[2:], mode='bilinear', align_corners=True) + d.lateral_block2(x1)
+        if d.config.dec_ipt: p1 = torch.cat((p1, ipt(d.ipt_blk2, p1, x1.shape[2:])), 1)
+        p1 = d.decoder_block1(p1)
+        if self.stop == "p1": return p1
+        p1 = F.interpolate(p1, size=x.shape[2:], mode='bilinear', align_corners=True)
+        if d.config.dec_ipt: p1 = torch.cat((p1, ipt(d.ipt_blk1, p1, x.shape[2:])), 1)
+        return d.conv_out1(p1)
+
+
 probes = {
+    **{f"cut256_{s}": (lambda s=s: export(f"cut256_{s}", Cut(full_model(False, split=True), s), torch.randn(1, 3, 256, 256)))
+       for s in ("sq", "p4", "p3", "p2", "p1", "out")},
     "s1_orig": lambda: export("s1_orig", Stage(96, 3, 128, "orig"), torch.randn(1, 128 * 128, 96)),
     "s1_v69": lambda: export("s1_v69", Stage(96, 3, 128, "v69"), torch.randn(1, 128 * 128, 96)),
     "s2_v69": lambda: export("s2_v69", Stage(192, 6, 64, "v69"), torch.randn(1, 64 * 64, 192)),

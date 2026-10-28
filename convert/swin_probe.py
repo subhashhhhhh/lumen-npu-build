@@ -101,6 +101,14 @@ class Full(nn.Module):
     def forward(self, x):
         return self.m(x)[-1]
 
+class SqueezeOnly(nn.Module):
+    def __init__(self, m):
+        super().__init__(); self.sq = m.squeeze_module
+
+    def forward(self, x):
+        return self.sq(x)
+
+
 class Cut(nn.Module):
     """The model up to a point: 'sq' (encoder + squeeze), 'p4'..'p2' (after that decoder stage),
     'p1' (decoder_block1, before the last upsampling), 'out' (everything)."""
@@ -111,6 +119,7 @@ class Cut(nn.Module):
         m, d = self.m, self.m.decoder
         mod = sys.modules[type(m).__module__]
         (x1, x2, x3, x4), _ = m.forward_enc(x)
+        if self.stop == "enc": return x4
         if m.config.squeeze_block:
             x4 = m.squeeze_module(x4)
         if self.stop == "sq": return x4
@@ -147,7 +156,10 @@ class Cut(nn.Module):
 
 probes = {
     **{f"cut256_{s}": (lambda s=s: export(f"cut256_{s}", Cut(full_model(False, split=True), s), torch.randn(1, 3, 256, 256)))
-       for s in ("sq", "p4", "p3", "p2", "p1", "out")},
+       for s in ("enc", "sq", "p4", "p3", "p2", "p1", "out")},
+    "bb256": lambda: export("bb256", Backbone(full_model(False)), torch.randn(1, 3, 256, 256)),
+    "bb128": lambda: export("bb128", Backbone(full_model(False)), torch.randn(1, 3, 128, 128)),
+    "sqonly256": lambda: export("sqonly256", SqueezeOnly(full_model(False, split=True)), torch.randn(1, 2880, 8, 8)),
     "s1_orig": lambda: export("s1_orig", Stage(96, 3, 128, "orig"), torch.randn(1, 128 * 128, 96)),
     "s1_v69": lambda: export("s1_v69", Stage(96, 3, 128, "v69"), torch.randn(1, 128 * 128, 96)),
     "s2_v69": lambda: export("s2_v69", Stage(192, 6, 64, "v69"), torch.randn(1, 64 * 64, 192)),

@@ -15,6 +15,15 @@ def soc(name):
     return models(name)
 
 
+# The plugin binary's exit status (a crash leaves no message, only a truncated log).
+import subprocess
+_run = subprocess.run
+def _logged_run(*args, **kwargs):
+    r = _run(*args, **kwargs)
+    if r.returncode: print(f"plugin exit status {r.returncode}", flush=True)
+    return r
+subprocess.run = _logged_run
+
 model, chip, out = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3])
 out.mkdir(parents=True, exist_ok=True)
 try:

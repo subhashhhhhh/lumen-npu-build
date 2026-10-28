@@ -67,7 +67,7 @@ bn.WindowAttention.forward = rw.attention_forward
 which = set(sys.argv[2].split(",")) if len(sys.argv) > 2 else None
 
 
-def full_model(v69, plain=True):
+def full_model(v69, plain=True, split=False):
     """BiRefNet-lite with the NPU rewrites (and the distilled student's plain convolutions)."""
     from transformers import AutoModelForImageSegmentation
     m = AutoModelForImageSegmentation.from_pretrained("ZhengPeng7/BiRefNet_lite", trust_remote_code=True).float().eval()
@@ -78,6 +78,8 @@ def full_model(v69, plain=True):
                     rc = child.regular_conv
                     setattr(mod, cn, nn.Conv2d(rc.in_channels, rc.out_channels, rc.kernel_size, padding=child.padding, bias=rc.bias is not None))
     rw.apply(m)
+    if split:
+        print("split convolutions:", rw.split_wide_convs(m), flush=True)
     if v69:
         lay = next(x for x in m.modules() if type(x).__name__ == "BasicLayer")
         type(lay).forward = lambda self, x, H, W: swin_v69.basic_layer_forward(self, x, H, W)
@@ -109,8 +111,11 @@ probes = {
     "bb512": lambda: export("bb512", Backbone(full_model(False)), torch.randn(1, 3, 512, 512)),
     "full256": lambda: export("full256", Full(full_model(False)), torch.randn(1, 3, 256, 256)),
     "full384": lambda: export("full384", Full(full_model(False)), torch.randn(1, 3, 384, 384)),
+    "full256_split": lambda: export("full256_split", Full(full_model(False, split=True)), torch.randn(1, 3, 256, 256)),
+    "full512_split": lambda: export("full512_split", Full(full_model(False, split=True)), torch.randn(1, 3, 512, 512)),
     # The v69 ones patch BasicLayer for good, so they come last.
     "bb512_v69": lambda: export("bb512_v69", Backbone(full_model(True)), torch.randn(1, 3, 512, 512)),
+    "full512_v69_split": lambda: export("full512_v69_split", Full(full_model(True, split=True)), torch.randn(1, 3, 512, 512)),
     "full512_v69": lambda: export("full512_v69", Full(full_model(True)), torch.randn(1, 3, 512, 512)),
 }
 for name, make in probes.items():

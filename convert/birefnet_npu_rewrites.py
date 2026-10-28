@@ -91,6 +91,43 @@ def image2patches(image, grid_h=2, grid_w=2, patch_ref=None, transformation=None
     return x.reshape(b, c * grid_h * grid_w, ph, pw)
 
 
+class SplitConv(torch.nn.Module):
+    """A convolution with very many input channels as a sum of convolutions over slices of them.
+    Same result; each part's weights fit the Snapdragon 7 Gen 1's 2 MB on-chip memory."""
+    def __init__(self, conv, chunk):
+        super().__init__()
+        self.parts = torch.nn.ModuleList()
+        for i, a in enumerate(range(0, conv.in_channels, chunk)):
+            b = min(a + chunk, conv.in_channels)
+            part = torch.nn.Conv2d(b - a, conv.out_channels, conv.kernel_size, conv.stride, conv.padding, conv.dilation,
+                                   bias=conv.bias is not None and i == 0)
+            part.weight.data.copy_(conv.weight.data[:, a:b])
+            if part.bias is not None: part.bias.data.copy_(conv.bias.data)
+            self.parts.append(part)
+        self.bounds = [(a, min(a + chunk, conv.in_channels)) for a in range(0, conv.in_channels, chunk)]
+
+    def forward(self, x):
+        out = None
+        for (a, b), part in zip(self.bounds, self.parts):
+            y = part(x[:, a:b])
+            out = y if out is None else out + y
+        return out
+
+
+def split_wide_convs(model, budget=6912):
+    """Splits every ungrouped convolution whose kernel area x input channels exceeds `budget`
+    (3x3 over more than 768 channels): at 32 output channels a slice, its fp16 weights alone
+    would take ~0.45 MB or more of on-chip memory."""
+    n = 0
+    for _, mod in list(model.named_modules()):
+        for cn, child in list(mod.named_children()):
+            if type(child) is torch.nn.Conv2d and child.groups == 1:
+                k2 = child.kernel_size[0] * child.kernel_size[1]
+                if k2 * child.in_channels > budget:
+                    setattr(mod, cn, SplitConv(child, max(32, budget // k2 // 32 * 32))); n += 1
+    return n
+
+
 def apply(model):
     module = sys.modules[type(model).__module__]
     assert not getattr(module.config, "SDPA_enabled", False) if hasattr(module, "config") else True

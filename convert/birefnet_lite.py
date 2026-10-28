@@ -68,11 +68,13 @@ rng = np.random.default_rng(0)
 def picture():
     x = torch.from_numpy(rng.uniform(0, 255, (1, 3, 64, 64)).astype(np.float32))
     return F.interpolate(x, size=(Side, Side), mode="bicubic").clamp(0, 255).permute(0, 2, 3, 1).contiguous()
-edge = litert_torch.convert(wrapped, (picture(),))
+x = picture()
+edge = litert_torch.convert(wrapped, (x,))
 edge.export(out)
-for _ in range(2):
-    x = picture()
-    with torch.no_grad():
-        want = wrapped(x).numpy()
-    got = edge(x.numpy())
-    print(f"tflite vs torch: max diff {np.abs(got - want).max():.5f}", flush=True)
+# The phone checks its run against PyTorch's: a test picture and the mask for it (raw float32).
+with torch.no_grad():
+    want = wrapped(x).numpy()
+stem = out.removesuffix(".tflite")
+x.numpy().astype("<f4").tofile(f"{stem}_input.bin")
+want.astype("<f4").tofile(f"{stem}_reference.bin")
+print("reference mask: mean", float(want.mean()), "share above 0.5", float((want > 0.5).mean()), flush=True)

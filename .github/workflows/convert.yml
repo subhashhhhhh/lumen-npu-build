@@ -23,6 +23,6 @@ jobs:
           pip install --quiet --force-reinstall --no-deps --index-url https://download.pytorch.org/whl/cpu "torchvision" "torch==$torch_version"
           python -c "import torch, torchvision; print(torch.__version__, torchvision.__version__)"
       - run: python convert/${{ inputs.model }}.py ${{ inputs.model }}.tflite
-      - run: ls -l *.tflite && gh release upload inputs ${{ inputs.model }}.tflite --clobber
+      - run: ls -l ${{ inputs.model }}* && gh release upload inputs ${{ inputs.model }}.tflite ${{ inputs.model }}_input.bin ${{ inputs.model }}_reference.bin --clobber
         env:
           GH_TOKEN: ${{ github.token }}

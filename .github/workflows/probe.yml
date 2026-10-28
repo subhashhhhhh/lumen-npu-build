@@ -11,8 +11,8 @@ on:
         description: Chips, space separated
         default: SM7450
       flags:
-        description: Extra Qualcomm compiler flags (e.g. --qualcomm_vtcm_size=2)
-        default: ""
+        description: Extra Qualcomm compiler flag sets, separated by ";" (each set is compiled separately; "-" means none)
+        default: "-"
 permissions:
   contents: read
   actions: write
@@ -47,19 +47,23 @@ jobs:
         run: pip install --no-cache-dir ai-edge-litert==2.3.0 ai-edge-litert-sdk-qualcomm==2.3.0
       - name: Compile probes
         run: |
+          IFS=';' read -ra sets <<< "${{ inputs.flags }}"
           for soc in ${{ inputs.socs }}; do
-            for f in probes/*.tflite; do
-              name=$(basename "$f" .tflite)
-              if QUALCOMM_FLAGS="${{ inputs.flags }}" timeout 900 /usr/bin/time -v python compile.py "$f" "$soc" "out/$soc" > "log_${name}_$soc.txt" 2>&1; then
-                echo "RESULT PASS $name $soc"
-              else
-                echo "RESULT FAIL $name $soc (exit $?)"
-                grep -E "plugin exit status|Maximum resident" "log_${name}_$soc.txt" | sed 's/^/  S /'
-                sudo dmesg 2>/dev/null | grep -i -E "killed process|out of memory|segfault|traps" | tail -2 | sed 's/^/  K /'
-                grep -v -E "tiling.h|simple_tiler|QnnTensor_createGraphTensor|QnnGraph_addNode|Add Graph" "log_${name}_$soc.txt" | grep -v "^\s*$" | tail -12 | cut -c1-300 | sed 's/^/  T /'
-                grep -oE "unable to tile [0-9a-fx]* ?q::[A-Za-z_0-9]+ sufficiently, min size = [0-9]+ +\[[0-9,]+\]" "log_${name}_$soc.txt" | sed 's/0x[0-9a-f]* //' | sort | uniq -c | sort -rn | head -8 | sed 's/^/  /'
-                grep -E "ERROR|<E>" "log_${name}_$soc.txt" | grep -v tiling.h | head -5 | cut -c1-300 | sed 's/^/  E /'
-              fi
+            for flags in "${sets[@]}"; do
+              [ "$flags" = "-" ] && flags=""
+              tag=$(echo "$flags" | tr -c 'a-z0-9=' '_' | sed 's/qualcomm_//g')
+              for f in probes/*.tflite; do
+                name=$(basename "$f" .tflite)
+                log="log_${name}_${soc}_${tag}.txt"
+                if QUALCOMM_FLAGS="$flags" timeout 900 /usr/bin/time -v python compile.py "$f" "$soc" "out/${soc}_${tag}" > "$log" 2>&1; then
+                  echo "RESULT PASS $name $soc [$flags]"
+                else
+                  echo "RESULT FAIL $name $soc [$flags]"
+                  grep -E "plugin exit status|Maximum resident" "$log" | sed 's/^/  S /'
+                  grep -oE "unable to tile [0-9a-fx]* ?q::[A-Za-z_0-9]+ sufficiently, min size = [0-9]+ +\[[0-9,]+\]" "$log" | sed 's/0x[0-9a-f]* //' | sort | uniq -c | sort -rn | head -4 | sed 's/^/  /'
+                  grep -E "ERROR|<E>" "$log" | grep -v tiling.h | head -3 | cut -c1-300 | sed 's/^/  E /'
+                fi
+              done
             done
           done
       - if: always()

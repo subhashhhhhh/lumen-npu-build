@@ -22,6 +22,24 @@ model = AutoModelForImageSegmentation.from_pretrained(path, trust_remote_code=Tr
 DeformableConv2d = type(next(m for m in model.modules() if type(m).__name__ == "DeformableConv2d"))
 
 
+# Swin's window split and merge reshape to 6 dimensions; Qualcomm's NPU takes at most 5. The same
+# windows, in the same order, with the batch and the row of windows merged into one dimension.
+def window_partition_5d(x, window_size):
+    b, h, w, c = x.shape
+    x = x.reshape(b * (h // window_size), window_size, w // window_size, window_size, c)
+    return x.permute(0, 2, 1, 3, 4).reshape(-1, window_size, window_size, c)
+
+
+def window_reverse_5d(windows, window_size, h, w):
+    c = windows.shape[-1]
+    b = int(windows.shape[0] / (h * w / window_size / window_size))
+    x = windows.reshape(b * (h // window_size), w // window_size, window_size, window_size, c)
+    return x.permute(0, 2, 1, 3, 4).reshape(b, h, w, c)
+
+
+birefnet_module = sys.modules[type(model).__module__]
+
+
 def plain_forward(self, x):
     """Modulated deformable convolution from standard ops, in one sampling step: the sampling
     points of all K kernel taps side by side in one grid (h x w*K), bilinear, zero outside, times
@@ -53,6 +71,7 @@ def plain_forward(self, x):
 
 
 DeformableConv2d.forward = plain_forward
+birefnet_module.window_partition, birefnet_module.window_reverse = window_partition_5d, window_reverse_5d
 
 
 class Wrapped(torch.nn.Module):

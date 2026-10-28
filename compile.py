@@ -25,7 +25,9 @@ except ValueError as e:
     m = re.search(r"See (\S+\.error)", str(e))
     if m and os.path.exists(m.group(1)):
         print("---- compiler error ----")
-        print(open(m.group(1)).read()[-6000:])
+        lines = open(m.group(1), errors="replace").read().splitlines()
+        errors = [l for l in lines if "ERROR" in l or "<E>" in l]
+        print("\n".join(l[:400] for l in errors[:40]) or "\n".join(lines[-40:]))
     raise
 print(result)
 for f in sorted(out.iterdir()): print(f.name, f.stat().st_size)

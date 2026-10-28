@@ -20,29 +20,32 @@ DeformableConv2d = type(next(m for m in model.modules() if type(m).__name__ == "
 
 
 def plain_forward(self, x):
-    """Modulated deformable convolution from standard ops. For each kernel tap k at (i, j): sample x
-    at (h - pad + i + dy, w - pad + j + dx), bilinear, zero outside, times the modulator; then all
-    taps x channels through one 1x1 convolution with the regular kernel's weights."""
+    """Modulated deformable convolution from standard ops, in one sampling step: the sampling
+    points of all K kernel taps side by side in one grid (h x w*K), bilinear, zero outside, times
+    the modulator; then taps x channels through one 1x1 convolution with the regular kernel's
+    weights. (One grid_sample per tap made a graph the converter and compiler choked on.)"""
     n, c, h, w = x.shape
     weight = self.regular_conv.weight
     kh, kw = weight.shape[2], weight.shape[3]
+    k_taps = kh * kw
     pad = self.padding if isinstance(self.padding, int) else self.padding[0]
-    offset = self.offset_conv(x)                              # (n, 2K, h, w): dy, dx per tap
-    modulator = 2.0 * torch.sigmoid(self.modulator_conv(x))  # (n, K, h, w)
-    ys = torch.arange(h, dtype=x.dtype).view(1, h, 1)
-    xs = torch.arange(w, dtype=x.dtype).view(1, 1, w)
-    taps = []
-    for k in range(kh * kw):
-        i, j = divmod(k, kw)
-        py = ys - pad + i + offset[:, 2 * k]
-        px = xs - pad + j + offset[:, 2 * k + 1]
-        # align_corners=True: pixel centres at -1 and +1 for the first and last row/column.
-        grid = torch.stack((px * (2.0 / (w - 1)) - 1.0, py * (2.0 / (h - 1)) - 1.0), dim=-1)
-        sampled = F.grid_sample(x, grid, mode="bilinear", padding_mode="zeros", align_corners=True)
-        taps.append(sampled * modulator[:, k:k + 1])
-    stacked = torch.stack(taps, dim=2).reshape(n, c * kh * kw, h, w)  # channel-major, tap-minor
-    out = F.conv2d(stacked, weight.reshape(weight.shape[0], c * kh * kw, 1, 1), self.regular_conv.bias)
-    return out
+    offset = self.offset_conv(x).reshape(n, k_taps, 2, h, w)   # dy, dx per tap
+    modulator = 2.0 * torch.sigmoid(self.modulator_conv(x))     # (n, K, h, w)
+    ti = (torch.arange(k_taps, dtype=x.dtype) // kw).view(1, k_taps, 1, 1)
+    tj = (torch.arange(k_taps, dtype=x.dtype) % kw).view(1, k_taps, 1, 1)
+    ys = torch.arange(h, dtype=x.dtype).view(1, 1, h, 1)
+    xs = torch.arange(w, dtype=x.dtype).view(1, 1, 1, w)
+    py = ys - pad + ti + offset[:, :, 0]                        # (n, K, h, w)
+    px = xs - pad + tj + offset[:, :, 1]
+    # align_corners=True: pixel centres at -1 and +1 for the first and last row/column.
+    gx = px * (2.0 / (w - 1)) - 1.0
+    gy = py * (2.0 / (h - 1)) - 1.0
+    grid = torch.stack((gx, gy), dim=-1).permute(0, 2, 3, 1, 4).reshape(n, h, w * k_taps, 2)  # (n, h, w*K, 2), tap-minor
+    sampled = F.grid_sample(x, grid, mode="bilinear", padding_mode="zeros", align_corners=True)  # (n, c, h, w*K)
+    sampled = sampled.reshape(n, c, h, w, k_taps).permute(0, 1, 4, 2, 3)                          # (n, c, K, h, w)
+    sampled = sampled * modulator.unsqueeze(1)
+    stacked = sampled.reshape(n, c * k_taps, h, w)               # channel-major, tap-minor
+    return F.conv2d(stacked, weight.reshape(weight.shape[0], c * k_taps, 1, 1), self.regular_conv.bias)
 
 
 

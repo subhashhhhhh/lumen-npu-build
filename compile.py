@@ -26,7 +26,8 @@ except ValueError as e:
     if m and os.path.exists(m.group(1)):
         print("---- compiler error ----")
         lines = open(m.group(1), errors="replace").read().splitlines()
-        errors = [l for l in lines if "ERROR" in l or "<E>" in l]
+        # The cause: errors, else the tiler's "unable to tile" lines (the many tiling.h warnings are noise).
+        errors = [l for l in lines if "ERROR" in l or "<E>" in l] or [l for l in lines if "unable to tile" in l or "not sufficiently tiled" in l]
         print("\n".join(l[:400] for l in errors[:40]) or "\n".join(lines[-40:]))
     raise
 print(result)

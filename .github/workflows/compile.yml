@@ -55,6 +55,7 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          shopt -s nullglob  # nothing compiled: no literal out/*/ (and no compiled-* tag)
           for dir in out/*/; do
             soc=$(basename "$dir")
             gh release view "compiled-$soc" >/dev/null 2>&1 || gh release create "compiled-$soc" --title "compiled-$soc" --notes "Models compiled ahead of time for $soc."
@@ -70,6 +71,7 @@ jobs:
           pip install --quiet huggingface_hub
           mkdir hf
           df -h /
+          shopt -s nullglob  # nothing compiled: no literal out/*/ (and no compiled-* tag)
           for dir in out/*/; do
             soc=$(basename "$dir"); mkdir "hf/$soc"
             for f in "$dir"*.tflite; do

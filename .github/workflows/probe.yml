@@ -1,0 +1,57 @@
+name: Probe NPU compile
+# Converts small probe models (convert/swin_probe.py) and compiles each for the given chips, to find
+# which formulations the Qualcomm compiler can tile. Prints one PASS/FAIL line per probe and chip.
+on:
+  workflow_dispatch:
+    inputs:
+      probes:
+        description: Probe names, comma separated (default - all)
+        default: ""
+      socs:
+        description: Chips, space separated
+        default: SM7450
+permissions:
+  contents: read
+jobs:
+  probe:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Free disk space
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Convert probes
+        run: |
+          pip install --quiet --extra-index-url https://download.pytorch.org/whl/cpu --pre litert-torch==0.10.0
+          pip install --quiet "transformers>=4.56" timm einops kornia safetensors huggingface_hub
+          torch_version=$(python -c "import torch; print(torch.__version__.split('+')[0])")
+          pip install --quiet --force-reinstall --no-deps --index-url https://download.pytorch.org/whl/cpu "torchvision" "torch==$torch_version"
+          python convert/swin_probe.py probes ${{ inputs.probes }} 2>&1 | grep -E "exported|FAILED|Error" || true
+          ls -l probes
+      - uses: actions/setup-python@v5
+        id: python
+        with:
+          python-version: "3.11"
+      - uses: actions/cache@v4
+        id: cache
+        with:
+          path: ${{ env.pythonLocation }}
+          key: litert-2.3.0-${{ steps.python.outputs.python-version }}
+      - if: steps.cache.outputs.cache-hit != 'true'
+        run: pip install --no-cache-dir ai-edge-litert==2.3.0 ai-edge-litert-sdk-qualcomm==2.3.0
+      - name: Compile probes
+        run: |
+          for soc in ${{ inputs.socs }}; do
+            for f in probes/*.tflite; do
+              name=$(basename "$f" .tflite)
+              if timeout 900 python compile.py "$f" "$soc" "out/$soc" > "log_${name}_$soc.txt" 2>&1; then
+                echo "RESULT PASS $name $soc"
+              else
+                echo "RESULT FAIL $name $soc"
+                grep -oE "unable to tile [0-9a-fx]* ?q::[A-Za-z_0-9]+ sufficiently, min size = [0-9]+ +\[[0-9,]+\]" "log_${name}_$soc.txt" | sed 's/0x[0-9a-f]* //' | sort | uniq -c | sort -rn | head -8 | sed 's/^/  /'
+                grep -E "ERROR|<E>" "log_${name}_$soc.txt" | grep -v tiling.h | head -5 | cut -c1-300 | sed 's/^/  E /'
+              fi
+            done
+          done

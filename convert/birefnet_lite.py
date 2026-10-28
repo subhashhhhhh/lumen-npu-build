@@ -4,7 +4,10 @@ Its deformable convolutions (torchvision's deform_conv2d: no LiteRT or NPU op) a
 grid_sample and a 1x1 convolution; on the owner's photos the masks matched the original to 7e-5,
 no pixel changing side. Raw RGB 0-255 in (1x1024x1024x3), subject mask out (1x1024x1024x1, 0-1).
 
-usage: birefnet_lite.py <out.tflite>
+usage: birefnet_lite.py <out.tflite> [side]
+
+Side: the square input. 1024 (the model's own) needs bigger NPU tiles than a Snapdragon 7 Gen 1's
+TCM takes (a 2.25 MB convolution input slice in the decoder); 768 and 512 are smaller.
 """
 import sys
 import numpy as np, torch
@@ -13,7 +16,7 @@ from huggingface_hub import snapshot_download
 from transformers import AutoModelForImageSegmentation
 
 out = sys.argv[1]
-Side = 1024
+Side = int(sys.argv[2]) if len(sys.argv) > 2 else 1024
 path = snapshot_download("ZhengPeng7/BiRefNet_lite")
 model = AutoModelForImageSegmentation.from_pretrained(path, trust_remote_code=True).float().eval()
 DeformableConv2d = type(next(m for m in model.modules() if type(m).__name__ == "DeformableConv2d"))

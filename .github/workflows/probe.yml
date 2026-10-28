@@ -49,7 +49,8 @@ jobs:
               if timeout 900 python compile.py "$f" "$soc" "out/$soc" > "log_${name}_$soc.txt" 2>&1; then
                 echo "RESULT PASS $name $soc"
               else
-                echo "RESULT FAIL $name $soc"
+                echo "RESULT FAIL $name $soc (exit $?)"
+                grep -v -E "tiling.h|simple_tiler|QnnTensor_createGraphTensor|QnnGraph_addNode|Add Graph" "log_${name}_$soc.txt" | grep -v "^\s*$" | tail -12 | cut -c1-300 | sed 's/^/  T /'
                 grep -oE "unable to tile [0-9a-fx]* ?q::[A-Za-z_0-9]+ sufficiently, min size = [0-9]+ +\[[0-9,]+\]" "log_${name}_$soc.txt" | sed 's/0x[0-9a-f]* //' | sort | uniq -c | sort -rn | head -8 | sed 's/^/  /'
                 grep -E "ERROR|<E>" "log_${name}_$soc.txt" | grep -v tiling.h | head -5 | cut -c1-300 | sed 's/^/  E /'
               fi

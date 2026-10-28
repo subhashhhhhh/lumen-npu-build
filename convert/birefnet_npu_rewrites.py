@@ -10,16 +10,18 @@ import torch.nn.functional as F
 def deformable_forward(self, x):
     """Modulated deformable convolution: for each kernel tap k at (i, j), x sampled bilinearly at
     (h - pad + i + dy, w - pad + j + dx), zero outside (as torchvision), times the modulator; taps x
-    channels then go through one 1x1 convolution with the regular kernel's weights. The sampling is
-    gathers on the flattened image (3 dimensions at most)."""
+    channels then go through one 1x1 convolution with the regular kernel's weights. The sampling
+    gathers whole rows (one pixel's channels) from the image laid out pixel-major: a plain Gather
+    the NPU compiler can tile, at most 3 dimensions. Batch of one (the app's only use)."""
     n, c, h, w = x.shape
+    assert n == 1
     weight = self.regular_conv.weight
     kh, kw = weight.shape[2], weight.shape[3]
     k = kh * kw
     pad = self.padding if isinstance(self.padding, int) else self.padding[0]
-    offset = self.offset_conv(x)                               # (n, 2K, h, w): dy, dx per tap
-    modulator = 2.0 * torch.sigmoid(self.modulator_conv(x))    # (n, K, h, w)
-    dy = offset[:, 0::2]                                       # (n, K, h, w)
+    offset = self.offset_conv(x)                               # (1, 2K, h, w): dy, dx per tap
+    modulator = 2.0 * torch.sigmoid(self.modulator_conv(x))    # (1, K, h, w)
+    dy = offset[:, 0::2]
     dx = offset[:, 1::2]
     taps = torch.arange(k, dtype=x.dtype).view(1, k, 1, 1)
     ti = torch.div(taps, kw, rounding_mode="floor")
@@ -30,18 +32,17 @@ def deformable_forward(self, x):
     x0 = torch.floor(px)
     ly = py - y0
     lx = px - x0
-    flat = x.reshape(n, c, h * w)
+    rows = x.reshape(c, h * w).t()                             # (h*w, c): one row per pixel
     points = k * h * w
     sampled = None
     for cy, wy in ((y0, 1 - ly), (y0 + 1, ly)):
         for cx, wx in ((x0, 1 - lx), (x0 + 1, lx)):
             inside = ((cy >= 0) & (cy <= h - 1) & (cx >= 0) & (cx <= w - 1)).to(x.dtype)
-            index = (cy.clamp(0, h - 1) * w + cx.clamp(0, w - 1)).to(torch.int64).reshape(n, 1, points)
-            corner = torch.gather(flat, 2, index.expand(n, c, points))           # (n, c, K*h*w)
-            part = corner * (wy * wx * inside).reshape(n, 1, points)
+            index = (cy.clamp(0, h - 1) * w + cx.clamp(0, w - 1)).to(torch.int32).reshape(points)
+            part = rows.index_select(0, index) * (wy * wx * inside).reshape(points, 1)   # (K*h*w, c)
             sampled = part if sampled is None else sampled + part
-    sampled = sampled * modulator.reshape(n, 1, points)
-    stacked = sampled.reshape(n, c * k, h, w)                                    # channel-major, tap-minor
+    sampled = sampled * modulator.reshape(points, 1)
+    stacked = sampled.reshape(k, h * w, c).permute(2, 0, 1).reshape(1, c * k, h, w)  # channel-major, tap-minor
     return F.conv2d(stacked, weight.reshape(weight.shape[0], c * k, 1, 1), self.regular_conv.bias)
 
 

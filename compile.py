@@ -19,6 +19,12 @@ def soc(name):
 import subprocess
 _run = subprocess.run
 def _logged_run(*args, **kwargs):
+    # Extra compiler flags the Python API doesn't forward, e.g. QUALCOMM_FLAGS="--qualcomm_vtcm_size=2"
+    # (an 8 Gen 1 target with a 7 Gen 1's 2 MB of on-chip memory).
+    extra = os.environ.get("QUALCOMM_FLAGS", "").split()
+    if extra and args and isinstance(args[0], list) and "apply_plugin" in str(args[0][0]):
+        args = (args[0] + extra,) + args[1:]
+        print("plugin flags:", " ".join(extra), flush=True)
     r = _run(*args, **kwargs)
     if r.returncode: print(f"plugin exit status {r.returncode}", flush=True)
     return r

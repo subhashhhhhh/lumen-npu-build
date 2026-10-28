@@ -8,6 +8,12 @@ on:
       models:
         description: Models in the inputs release, space separated
         default: siglip_visual ocr_det
+      flags:
+        description: Extra Qualcomm compiler flags (e.g. --qualcomm_vtcm_size=2)
+        default: ""
+      variant:
+        description: Suffix for the output folder and release (e.g. _vtcm2), so a variant doesn't replace the standard build
+        default: ""
       huggingface:
         description: Also upload to huggingface.co/subhashhhhhh/lumen-npu
         type: boolean
@@ -44,7 +50,7 @@ jobs:
             for model in ${{ inputs.models }}; do
               # A failed compile can leave an empty file behind; drop it so nothing half-made is published.
               # A stuck compile stops after 20 minutes instead of holding the runner for hours.
-              timeout 1200 python compile.py "in/$model.tflite" "$soc" "out/$soc" || { echo "::warning::$model failed for $soc"; rm -f "out/$soc/${model}_"*; }
+              QUALCOMM_FLAGS="${{ inputs.flags }}" timeout 1200 python compile.py "in/$model.tflite" "$soc" "out/$soc${{ inputs.variant }}" || { echo "::warning::$model failed for $soc"; rm -f "out/$soc${{ inputs.variant }}/${model}_"*; }
             done
           done
           find out -type f -empty -delete

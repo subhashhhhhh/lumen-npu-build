@@ -10,6 +10,9 @@ on:
       socs:
         description: Chips, space separated
         default: SM7450
+      flags:
+        description: Extra Qualcomm compiler flags (e.g. --qualcomm_vtcm_size=2)
+        default: ""
 permissions:
   contents: read
   actions: write
@@ -47,7 +50,7 @@ jobs:
           for soc in ${{ inputs.socs }}; do
             for f in probes/*.tflite; do
               name=$(basename "$f" .tflite)
-              if timeout 900 /usr/bin/time -v python compile.py "$f" "$soc" "out/$soc" > "log_${name}_$soc.txt" 2>&1; then
+              if QUALCOMM_FLAGS="${{ inputs.flags }}" timeout 900 /usr/bin/time -v python compile.py "$f" "$soc" "out/$soc" > "log_${name}_$soc.txt" 2>&1; then
                 echo "RESULT PASS $name $soc"
               else
                 echo "RESULT FAIL $name $soc (exit $?)"

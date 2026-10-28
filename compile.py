@@ -1,5 +1,5 @@
 """Ahead-of-time compiles a .tflite model for one Qualcomm chip with LiteRT's compiler."""
-import pathlib, sys
+import os, pathlib, sys
 from ai_edge_litert.aot import aot_compile
 from ai_edge_litert.aot.vendors.qualcomm import target as qnn
 
@@ -17,7 +17,16 @@ def soc(name):
 
 model, chip, out = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3])
 out.mkdir(parents=True, exist_ok=True)
-result = aot_compile.aot_compile(model, output_dir=out, target=qnn.Target(soc_model=soc(chip)), keep_going=False)
+try:
+    result = aot_compile.aot_compile(model, output_dir=out, target=qnn.Target(soc_model=soc(chip)), keep_going=False)
+except ValueError as e:
+    # The plugin's own message is in a file the exception only names: show its end.
+    import re
+    m = re.search(r"See (\S+\.error)", str(e))
+    if m and os.path.exists(m.group(1)):
+        print("---- compiler error ----")
+        print(open(m.group(1)).read()[-6000:])
+    raise
 print(result)
 for f in sorted(out.iterdir()): print(f.name, f.stat().st_size)
 if not any(out.iterdir()): sys.exit("nothing compiled")

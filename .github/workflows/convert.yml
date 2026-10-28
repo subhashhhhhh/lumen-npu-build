@@ -1,0 +1,24 @@
+name: Convert a model to LiteRT
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: Script in convert/ (without .py); the result goes to the inputs release as <model>.tflite
+        default: birefnet_lite
+permissions:
+  contents: write
+jobs:
+  convert:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: |
+          pip install --quiet --extra-index-url https://download.pytorch.org/whl/cpu --pre litert-torch==0.10.0
+          pip install --quiet "transformers>=4.56" timm einops kornia safetensors huggingface_hub
+      - run: python convert/${{ inputs.model }}.py ${{ inputs.model }}.tflite
+      - run: ls -l *.tflite && gh release upload inputs ${{ inputs.model }}.tflite --clobber
+        env:
+          GH_TOKEN: ${{ github.token }}

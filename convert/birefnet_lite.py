@@ -19,59 +19,11 @@ out = sys.argv[1]
 Side = int(sys.argv[2]) if len(sys.argv) > 2 else 1024
 path = snapshot_download("ZhengPeng7/BiRefNet_lite")
 model = AutoModelForImageSegmentation.from_pretrained(path, trust_remote_code=True).float().eval()
-DeformableConv2d = type(next(m for m in model.modules() if type(m).__name__ == "DeformableConv2d"))
-
-
-# Swin's window split and merge reshape to 6 dimensions; Qualcomm's NPU takes at most 5. The same
-# windows, in the same order, with the batch and the row of windows merged into one dimension.
-def window_partition_5d(x, window_size):
-    b, h, w, c = x.shape
-    x = x.reshape(b * (h // window_size), window_size, w // window_size, window_size, c)
-    return x.permute(0, 2, 1, 3, 4).reshape(-1, window_size, window_size, c)
-
-
-def window_reverse_5d(windows, window_size, h, w):
-    c = windows.shape[-1]
-    b = int(windows.shape[0] / (h * w / window_size / window_size))
-    x = windows.reshape(b * (h // window_size), w // window_size, window_size, window_size, c)
-    return x.permute(0, 2, 1, 3, 4).reshape(b, h, w, c)
-
-
-birefnet_module = sys.modules[type(model).__module__]
-
-
-def plain_forward(self, x):
-    """Modulated deformable convolution from standard ops, in one sampling step: the sampling
-    points of all K kernel taps side by side in one grid (h x w*K), bilinear, zero outside, times
-    the modulator; then taps x channels through one 1x1 convolution with the regular kernel's
-    weights. (One grid_sample per tap made a graph the converter and compiler choked on.)"""
-    n, c, h, w = x.shape
-    weight = self.regular_conv.weight
-    kh, kw = weight.shape[2], weight.shape[3]
-    k_taps = kh * kw
-    pad = self.padding if isinstance(self.padding, int) else self.padding[0]
-    offset = self.offset_conv(x).reshape(n, k_taps, 2, h, w)   # dy, dx per tap
-    modulator = 2.0 * torch.sigmoid(self.modulator_conv(x))     # (n, K, h, w)
-    ti = (torch.arange(k_taps, dtype=x.dtype) // kw).view(1, k_taps, 1, 1)
-    tj = (torch.arange(k_taps, dtype=x.dtype) % kw).view(1, k_taps, 1, 1)
-    ys = torch.arange(h, dtype=x.dtype).view(1, 1, h, 1)
-    xs = torch.arange(w, dtype=x.dtype).view(1, 1, 1, w)
-    py = ys - pad + ti + offset[:, :, 0]                        # (n, K, h, w)
-    px = xs - pad + tj + offset[:, :, 1]
-    # align_corners=True: pixel centres at -1 and +1 for the first and last row/column.
-    gx = px * (2.0 / (w - 1)) - 1.0
-    gy = py * (2.0 / (h - 1)) - 1.0
-    grid = torch.stack((gx, gy), dim=-1).permute(0, 2, 3, 1, 4).reshape(n, h, w * k_taps, 2)  # (n, h, w*K, 2), tap-minor
-    sampled = F.grid_sample(x, grid, mode="bilinear", padding_mode="zeros", align_corners=True)  # (n, c, h, w*K)
-    sampled = sampled.reshape(n, c, h, w, k_taps).permute(0, 1, 4, 2, 3)                          # (n, c, K, h, w)
-    sampled = sampled * modulator.unsqueeze(1)
-    stacked = sampled.reshape(n, c * k_taps, h, w)               # channel-major, tap-minor
-    return F.conv2d(stacked, weight.reshape(weight.shape[0], c * k_taps, 1, 1), self.regular_conv.bias)
-
-
-
-DeformableConv2d.forward = plain_forward
-birefnet_module.window_partition, birefnet_module.window_reverse = window_partition_5d, window_reverse_5d
+# Rewritten for Qualcomm's NPU: no deformable convolution or grid_sample, nothing above 4
+# dimensions (see birefnet_npu_rewrites.py; checked against the original on the owner's photos).
+sys.path.insert(0, __import__("os").path.dirname(__file__))
+import birefnet_npu_rewrites
+birefnet_npu_rewrites.apply(model)
 
 
 class Wrapped(torch.nn.Module):

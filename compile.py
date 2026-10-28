@@ -29,6 +29,11 @@ except ValueError as e:
         # The cause: errors, else the tiler's "unable to tile" lines (the many tiling.h warnings are noise).
         errors = [l for l in lines if "ERROR" in l or "<E>" in l] or [l for l in lines if "unable to tile" in l or "not sufficiently tiled" in l]
         print("\n".join(l[:400] for l in errors[:40]) or "\n".join(lines[-40:]))
+        # The tiler's warnings flood the file; the fatal line is usually among the rest, near the end.
+        rest = [l for l in lines if "tiling.h" not in l and "simple_tiler" not in l]
+        print("---- compiler log without tiler warnings (last 80) ----")
+        print("\n".join(l[:400] for l in rest[-80:]))
+        print("---- error file:", len(lines), "lines ----")
     raise
 print(result)
 for f in sorted(out.iterdir()): print(f.name, f.stat().st_size)

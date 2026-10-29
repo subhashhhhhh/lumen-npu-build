@@ -1,7 +1,8 @@
 """Cutout model with integer weights and activations, for NPUs: calibrated on COCO photos, then
 checked against the float model on other COCO photos.
 
-usage: int8.py <in.tflite> <out.tflite> <scheme> <photos dir> [calibration count] [check count]
+usage: int8.py <in.tflite> <out.tflite> <scheme> <photos dir> [calibration count] [check count] [reference.tflite]
+reference: another float model to check against too (e.g. float v3, for a QAT-trained model)
 scheme: a8w8 (8-bit activations and weights) or a16w8 (16-bit activations, 8-bit weights)
 """
 import os, sys, time
@@ -13,6 +14,7 @@ from ai_edge_quantizer import quantizer, qtyping, calibrator
 src, dst, scheme, photos = sys.argv[1:5]
 calib_n = int(sys.argv[5]) if len(sys.argv) > 5 else 64
 check_n = int(sys.argv[6]) if len(sys.argv) > 6 else 100
+reference = sys.argv[7] if len(sys.argv) > 7 and sys.argv[7] else None
 bits = {"a8w8": 8, "a16w8": 16}[scheme]
 
 probe = Interpreter(model_path=src)
@@ -66,11 +68,19 @@ def masks(path, images):
 
 images = [load(f) for f in check_files]
 want, got = masks(src, images), masks(dst, images)
-flips = np.array([((a > .5) != (b > .5)).mean() for a, b in zip(want, got)])
-diff = np.array([np.abs(a - b).mean() for a, b in zip(want, got)])
-# IoU only where the float model finds a subject (1% of the photo or more): an empty mask has no IoU.
-subject = np.array([(a > .5).mean() >= 0.01 for a in want])
-iou = np.array([((a > .5) & (b > .5)).sum() / ((a > .5) | (b > .5)).sum() for a, b, k in zip(want, got, subject) if k])
-print(f"{scheme} vs float on {len(images)} COCO photos: pixels changing side mean {flips.mean() * 100:.3f}%, "
-      f"median {np.median(flips) * 100:.3f}%, worst {flips.max() * 100:.2f}%; mean diff {diff.mean():.4f}; "
-      f"IoU on {len(iou)} photos with a subject: median {np.median(iou):.4f}, worst {iou.min():.3f}", flush=True)
+
+
+def compare(name, want, got):
+    flips = np.array([((a > .5) != (b > .5)).mean() for a, b in zip(want, got)])
+    diff = np.array([np.abs(a - b).mean() for a, b in zip(want, got)])
+    # IoU only where the float model finds a subject (1% of the photo or more): an empty mask has no IoU.
+    subject = np.array([(a > .5).mean() >= 0.01 for a in want])
+    iou = np.array([((a > .5) & (b > .5)).sum() / ((a > .5) | (b > .5)).sum() for a, b, k in zip(want, got, subject) if k])
+    print(f"{scheme} vs {name} on {len(images)} COCO photos: pixels changing side mean {flips.mean() * 100:.3f}%, "
+          f"median {np.median(flips) * 100:.3f}%, worst {flips.max() * 100:.2f}%; mean diff {diff.mean():.4f}; "
+          f"IoU on {len(iou)} photos with a subject: median {np.median(iou):.4f}, mean {iou.mean():.4f}, worst {iou.min():.3f}", flush=True)
+
+
+compare("float", want, got)
+if reference:
+    compare(os.path.basename(reference).removesuffix(".tflite"), masks(reference, images), got)

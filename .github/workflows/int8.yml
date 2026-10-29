@@ -14,6 +14,9 @@ on:
       check:
         description: Other COCO val photos to check against the float model
         default: "100"
+      reference:
+        description: Optional - another float model in the inputs release to check against too (e.g. birefnet_v3probe_d2_512)
+        default: ""
 permissions:
   contents: write
 jobs:
@@ -43,13 +46,14 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release download inputs --dir in -p "${{ inputs.model }}.tflite"
+          if [ -n "${{ inputs.reference }}" ]; then gh release download inputs --dir in -p "${{ inputs.reference }}.tflite"; fi
           curl -sSfL -o val2017.zip http://images.cocodataset.org/zips/val2017.zip
           unzip -q val2017.zip && rm val2017.zip
       - name: Quantize and check
         run: |
           set -o pipefail
           free -h | head -2
-          python convert/int8.py "in/${{ inputs.model }}.tflite" "${{ inputs.model }}_${{ matrix.scheme }}.tflite" ${{ matrix.scheme }} val2017 ${{ inputs.calibration }} ${{ inputs.check }} | tee report.txt
+          python convert/int8.py "in/${{ inputs.model }}.tflite" "${{ inputs.model }}_${{ matrix.scheme }}.tflite" ${{ matrix.scheme }} val2017 ${{ inputs.calibration }} ${{ inputs.check }} "${{ inputs.reference && format('in/{0}.tflite', inputs.reference) || '' }}" | tee report.txt
       - name: Put it in the inputs release (for the compile workflow)
         env:
           GH_TOKEN: ${{ github.token }}

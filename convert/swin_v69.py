@@ -35,19 +35,21 @@ def shift_mask(h, w, ws, shift):
         hp, wp = -(-h // ws) * ws, -(-w // ws) * ws
         kh, _, th = _keys(h, hp, ws, shift)
         kw, _, tw = _keys(w, wp, ws, shift)
-        masks = []
-        for wy in range(th // ws):
-            for wx in range(tw // ws):
-                toks = [(kh[wy * ws + i], kw[wx * ws + j]) for i in range(ws) for j in range(ws)]
-                m = torch.full((ws * ws, ws * ws), -100.0)
-                for a, ta in enumerate(toks):
-                    if ta[0] is None or ta[1] is None: continue
-                    for b, tb in enumerate(toks):
-                        if tb[0] is not None and tb[1] is not None and ta == tb:
-                            m[a, b] = 0.0
-                masks.append(m)
-        _masks[key] = torch.stack(masks)
-    return _masks[key]
+        # Built in numpy: torch ops here would be traced one element at a time by torch.export
+        # (millions of nodes at 512, an export that never finishes).
+        import numpy as np
+        def ids(keys):  # each row/column's key as an integer, -1 for padding
+            u = {k: i for i, k in enumerate(dict.fromkeys(k for k in keys if k is not None))}
+            return np.array([-1 if k is None else u[k] for k in keys])
+        ih, iw = ids(kh), ids(kw)
+        nh, nw = th // ws, tw // ws
+        tok_h = ih.reshape(nh, ws)[:, None, :, None].repeat(nw, 1).repeat(ws, 3)   # (nh, nw, ws, ws)
+        tok_w = iw.reshape(nw, ws)[None, :, None, :].repeat(nh, 0).repeat(ws, 2)
+        valid = (tok_h >= 0) & (tok_w >= 0)
+        tok = np.where(valid, tok_h * (iw.max() + 2) + tok_w, -1).reshape(nh * nw, ws * ws)
+        same = (tok[:, :, None] == tok[:, None, :]) & (tok[:, :, None] >= 0)
+        _masks[key] = np.where(same, 0.0, -100.0).astype(np.float32)
+    return torch.from_numpy(_masks[key])
 
 
 def block_forward(blk, x, h, w, window_partition, window_reverse, extra_pad=False):

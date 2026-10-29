@@ -21,9 +21,22 @@ on:
 permissions:
   contents: write
 jobs:
-  # One job for every chip and model: setting up Qualcomm's SDK is the slow part, compiling takes seconds.
-  compile:
+  chips:
     runs-on: ubuntu-22.04
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - id: list
+        run: echo "list=$(echo '${{ inputs.socs }}' | xargs -n1 | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+  # One runner per chip, all at once: a large model takes minutes per chip, so one runner doing
+  # every chip in turn took hours.
+  compile:
+    needs: chips
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        soc: ${{ fromJSON(needs.chips.outputs.list) }}
     steps:
       - name: Free disk space (Qualcomm's SDK is several GB)
         run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL /usr/local/share/boost
@@ -40,18 +53,18 @@ jobs:
           key: litert-2.3.0-${{ steps.python.outputs.python-version }}
       - if: steps.cache.outputs.cache-hit != 'true'
         run: pip install --no-cache-dir ai-edge-litert==2.3.0 ai-edge-litert-sdk-qualcomm==2.3.0
-      - run: gh release download inputs --dir in
+      - name: Download the models
+        run: for model in ${{ inputs.models }}; do gh release download inputs --dir in --pattern "$model.tflite"; done
         env:
           GH_TOKEN: ${{ github.token }}
       - name: Compile
         run: |
           free -h | head -2
-          for soc in ${{ inputs.socs }}; do
-            for model in ${{ inputs.models }}; do
-              # A failed compile can leave an empty file behind; drop it so nothing half-made is published.
-              # A stuck compile stops after 20 minutes instead of holding the runner for hours.
-              QUALCOMM_FLAGS="${{ inputs.flags }}" timeout 1200 python compile.py "in/$model.tflite" "$soc" "out/${soc}${{ inputs.variant }}" || { echo "::warning::$model failed for $soc"; rm -f "out/${soc}${{ inputs.variant }}/${model}_"*; }
-            done
+          soc=${{ matrix.soc }}
+          for model in ${{ inputs.models }}; do
+            # A failed compile can leave an empty file behind; drop it so nothing half-made is published.
+            # A stuck compile stops after 20 minutes instead of holding the runner for hours.
+            QUALCOMM_FLAGS="${{ inputs.flags }}" timeout 1200 python compile.py "in/$model.tflite" "$soc" "out/${soc}${{ inputs.variant }}" || { echo "::warning::$model failed for $soc"; rm -f "out/${soc}${{ inputs.variant }}/${model}_"*; }
           done
           find out -type f -empty -delete
           find out -type d -empty -delete
@@ -64,7 +77,7 @@ jobs:
           shopt -s nullglob  # nothing compiled: no literal out/*/ (and no compiled-* tag)
           for dir in out/*/; do
             soc=$(basename "$dir")
-            gh release view "compiled-$soc" >/dev/null 2>&1 || gh release create "compiled-$soc" --title "compiled-$soc" --notes "Models compiled ahead of time for $soc."
+            gh release view "compiled-$soc" >/dev/null 2>&1 || gh release create "compiled-$soc" --title "compiled-$soc" --notes "Models compiled ahead of time for $soc." || gh release view "compiled-$soc" >/dev/null
             gh release upload "compiled-$soc" "$dir"*.tflite --clobber
           done
       # <chip>/<model>.tflite in the public model repo Lumen downloads from.
@@ -86,4 +99,8 @@ jobs:
             done
           done
           ls -R hf | head -40
-          hf upload subhashhhhhh/lumen-npu hf . --commit-message "Compile ${{ inputs.models }} for ${{ inputs.socs }} (run ${{ github.run_id }})"
+          # Every chip's runner commits to the same repo at about the same time: retry a commit that collides.
+          for try in 1 2 3 4 5; do
+            hf upload subhashhhhhh/lumen-npu hf . --commit-message "Compile ${{ inputs.models }} for ${{ matrix.soc }} (run ${{ github.run_id }})" && break
+            [ "$try" = 5 ] && exit 1; sleep $((RANDOM % 30 + 10))
+          done

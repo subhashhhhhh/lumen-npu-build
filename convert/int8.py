@@ -35,7 +35,10 @@ q = quantizer.Quantizer(src)
 q.add_static_config(regex=".*", operation_name=qtyping.TFLOperationName.ALL_SUPPORTED,
                     activation_num_bits=bits, weight_num_bits=8)
 start = time.time()
-calibration = q.calibrate({signature: ({input_name: load(f)} for f in calib_files)}, num_threads=os.cpu_count(),
+# A list, not a generator: the calibrator walks the data more than once.
+samples = [{input_name: load(f)} for f in calib_files]
+print(f"{len(files)} photos found; calibrating on {len(samples)}", flush=True)
+calibration = q.calibrate({signature: samples}, num_threads=os.cpu_count(),
                           mode=calibrator.CalibrationMode.CALIBRATION_PROFILER_BASED)
 print(f"calibrated on {len(calib_files)} photos in {time.time() - start:.0f} s", flush=True)
 q.quantize(calibration).export_model(dst, overwrite=True)

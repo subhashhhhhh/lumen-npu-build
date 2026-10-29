@@ -48,9 +48,18 @@ print(f"{os.path.getsize(src) / 1e6:.0f} MB -> {os.path.getsize(dst) / 1e6:.0f} 
 def masks(path, images):
     it = Interpreter(model_path=path, num_threads=os.cpu_count())
     run = it.get_signature_runner(signature)
+    # A quantized model takes and gives integers: scale the photo in and the mask out.
+    i = run.get_input_details()[input_name]
+    o = next(iter(run.get_output_details().values()))
+    (i_scale, i_zero), (o_scale, o_zero) = i["quantization"], o["quantization"]
+    print(f"{os.path.basename(path)}: input {i['dtype'].__name__} {i['quantization']}, output {o['dtype'].__name__} {o['quantization']}", flush=True)
     out, start = [], time.time()
     for image in images:
-        out.append(next(iter(run(**{input_name: image}).values())).ravel())
+        if i_scale:
+            info = np.iinfo(i["dtype"])
+            image = np.clip(np.round(image / i_scale + i_zero), info.min, info.max).astype(i["dtype"])
+        mask = next(iter(run(**{input_name: image}).values())).ravel()
+        out.append((mask.astype(np.float32) - o_zero) * o_scale if o_scale else mask)
     print(f"{os.path.basename(path)}: {(time.time() - start) / len(images):.1f} s a photo on this CPU", flush=True)
     return out
 

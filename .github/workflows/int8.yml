@@ -47,6 +47,7 @@ jobs:
           unzip -q val2017.zip && rm val2017.zip
       - name: Quantize and check
         run: |
+          set -o pipefail
           free -h | head -2
           python convert/int8.py "in/${{ inputs.model }}.tflite" "${{ inputs.model }}_${{ matrix.scheme }}.tflite" ${{ matrix.scheme }} val2017 ${{ inputs.calibration }} ${{ inputs.check }} | tee report.txt
       - name: Put it in the inputs release (for the compile workflow)

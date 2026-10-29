@@ -20,6 +20,7 @@ VARIANTS = {
     "gelu": [Op.GELU],
     "elementwise": [Op.ADD, Op.MUL, Op.SUB, Op.DIV],
     "output": [Op.LOGISTIC],
+    "elementwise_softmax": [Op.ADD, Op.MUL, Op.SUB, Op.DIV, Op.SOFTMAX],
     # Everything 16-bit except the heavy layers: what an NPU-friendly mix would look like.
     "conv8": "conv8",
 }
@@ -82,6 +83,8 @@ def masks(path, images):
 images = [load(f) for f in check_files]
 want, got = masks(src, images), masks(dst, images)
 flips = np.array([((a > .5) != (b > .5)).mean() for a, b in zip(want, got)])
-iou = np.array([((a > .5) & (b > .5)).sum() / max(1, ((a > .5) | (b > .5)).sum()) for a, b in zip(want, got)])
-print(f"RESULT {variant}: IoU median {np.median(iou):.4f}, mean {iou.mean():.4f}, worst {iou.min():.3f}; "
+# IoU only where the float model finds a subject (1% of the photo or more): an empty mask has no IoU.
+subject = np.array([(a > .5).mean() >= 0.01 for a in want])
+iou = np.array([((a > .5) & (b > .5)).sum() / ((a > .5) | (b > .5)).sum() for a, b, k in zip(want, got, subject) if k])
+print(f"RESULT {variant}: IoU on {len(iou)} photos with a subject: median {np.median(iou):.4f}, mean {iou.mean():.4f}, worst {iou.min():.3f}; "
       f"pixels changing side median {np.median(flips) * 100:.2f}%, mean {flips.mean() * 100:.2f}% ({len(images)} photos)", flush=True)

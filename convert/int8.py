@@ -68,7 +68,9 @@ images = [load(f) for f in check_files]
 want, got = masks(src, images), masks(dst, images)
 flips = np.array([((a > .5) != (b > .5)).mean() for a, b in zip(want, got)])
 diff = np.array([np.abs(a - b).mean() for a, b in zip(want, got)])
-iou = np.array([((a > .5) & (b > .5)).sum() / max(1, ((a > .5) | (b > .5)).sum()) for a, b in zip(want, got)])
+# IoU only where the float model finds a subject (1% of the photo or more): an empty mask has no IoU.
+subject = np.array([(a > .5).mean() >= 0.01 for a in want])
+iou = np.array([((a > .5) & (b > .5)).sum() / ((a > .5) | (b > .5)).sum() for a, b, k in zip(want, got, subject) if k])
 print(f"{scheme} vs float on {len(images)} COCO photos: pixels changing side mean {flips.mean() * 100:.3f}%, "
       f"median {np.median(flips) * 100:.3f}%, worst {flips.max() * 100:.2f}%; mean diff {diff.mean():.4f}; "
-      f"IoU median {np.median(iou):.4f}, worst {iou.min():.3f}", flush=True)
+      f"IoU on {len(iou)} photos with a subject: median {np.median(iou):.4f}, worst {iou.min():.3f}", flush=True)

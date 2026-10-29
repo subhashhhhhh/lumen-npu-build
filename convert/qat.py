@@ -75,7 +75,7 @@ class FQ(nn.Module):
 
     def forward(self, x):
         # An fp16 overflow must not poison the moving ranges for good.
-        y = torch.nan_to_num(x.float(), nan=0.0, posinf=65504.0, neginf=-65504.0)
+        y = torch.nan_to_num(x if x.dtype == torch.float32 else x.float(), nan=0.0, posinf=65504.0, neginf=-65504.0)
         return self.fq(y).to(x.dtype)
 
 

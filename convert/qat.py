@@ -74,7 +74,9 @@ class FQ(nn.Module):
                                                 dtype=torch.qint8, qscheme=torch.per_tensor_affine)
 
     def forward(self, x):
-        return self.fq(x.float()).to(x.dtype)
+        # An fp16 overflow must not poison the moving ranges for good.
+        y = torch.nan_to_num(x.float(), nan=0.0, posinf=65504.0, neginf=-65504.0)
+        return self.fq(y).to(x.dtype)
 
 
 class WeightFQ(nn.Module):

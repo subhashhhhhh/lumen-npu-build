@@ -1,0 +1,42 @@
+name: Publish the cutout model
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: LiteRT model in the inputs release (float32)
+        default: birefnet_student_512
+      weights:
+        description: PyTorch weights in the inputs release, published as pytorch/decoder_v2.pt
+        default: birefnet_student_v2.pt
+      sha256:
+        description: Expected SHA-256 of the float16-weight model (what Lumen downloads)
+        default: 646e61d76cc1c3cda002b420ff47c11b795bee50d204ad2934fae7d6e0db05c8
+permissions:
+  contents: read
+jobs:
+  # Built and uploaded here, not from the owner's connection: ~160 MB goes up in seconds.
+  publish:
+    runs-on: ubuntu-22.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet ai-edge-quantizer ai-edge-litert huggingface_hub
+      - name: Download
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download inputs --dir in -p "${{ inputs.model }}.tflite" -p "${{ inputs.model }}_input.bin" -p "${{ inputs.model }}_reference.bin" -p "${{ inputs.weights }}"
+      - name: Float16 weights, checked against PyTorch and the expected checksum
+        run: |
+          mkdir -p hf/pytorch
+          python convert/fp16_weights.py "in/${{ inputs.model }}.tflite" hf/cutout_512.tflite "in/${{ inputs.model }}_input.bin" "in/${{ inputs.model }}_reference.bin"
+          echo "${{ inputs.sha256 }}  hf/cutout_512.tflite" | sha256sum -c
+          cp "in/${{ inputs.weights }}" hf/pytorch/decoder_v2.pt
+          cp cutout/README.md hf/README.md
+          ls -l hf hf/pytorch
+      - name: Upload to Hugging Face
+        env:
+          HF_TOKEN: ${{ secrets.HF_TOKEN }}
+        run: hf upload subhashhhhhh/lumen-cutout hf . --commit-message "Cutout model v2 (run ${{ github.run_id }})"

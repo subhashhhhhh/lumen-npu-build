@@ -157,6 +157,11 @@ class Cut(nn.Module):
 probes = {
     **{f"cut256_{s}": (lambda s=s: export(f"cut256_{s}", Cut(full_model(False, split=True), s), torch.randn(1, 3, 256, 256)))
        for s in ("enc", "sq", "p4", "p3", "p2", "p1", "out")},
+    "st1_64": lambda: export("st1_64", Stage(96, 3, 64, "orig"), torch.randn(1, 64 * 64, 96)),
+    "st2_32": lambda: export("st2_32", Stage(192, 6, 32, "orig"), torch.randn(1, 32 * 32, 192)),
+    "st3_16": lambda: export("st3_16", Stage(384, 12, 16, "orig"), torch.randn(1, 16 * 16, 384)),
+    "st4_8": lambda: export("st4_8", Stage(768, 24, 8, "orig"), torch.randn(1, 8 * 8, 768)),
+    "st4_16": lambda: export("st4_16", Stage(768, 24, 16, "orig"), torch.randn(1, 16 * 16, 768)),
     "bb256": lambda: export("bb256", Backbone(full_model(False)), torch.randn(1, 3, 256, 256)),
     "bb128": lambda: export("bb128", Backbone(full_model(False)), torch.randn(1, 3, 128, 128)),
     "sqonly256": lambda: export("sqonly256", SqueezeOnly(full_model(False, split=True)), torch.randn(1, 2880, 8, 8)),

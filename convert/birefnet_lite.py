@@ -70,6 +70,10 @@ class Wrapped(torch.nn.Module):
 
 
 
+import faulthandler, time
+faulthandler.dump_traceback_later(300, repeat=True)  # a stuck convert shows where it is
+_t0 = time.time()
+print('converting', flush=True)
 import litert_torch
 wrapped = Wrapped(model).eval()
 rng = np.random.default_rng(0)
@@ -80,6 +84,7 @@ def picture():
 x = picture()
 edge = litert_torch.convert(wrapped, (x,))
 edge.export(out)
+print('converted in', round(time.time() - _t0), 's', flush=True)
 # The phone checks its run against PyTorch's: a test picture and the mask for it (raw float32).
 with torch.no_grad():
     want = wrapped(x).numpy()

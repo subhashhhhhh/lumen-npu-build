@@ -127,8 +127,19 @@ def fake_quantize(gm):
     return acts, weights
 
 
-def build(student_sd, dilate, side, batch, model_src="ZhengPeng7/BiRefNet_lite"):
-    """The rewritten student as a fake-quantized GraphModule (fixed batch and side)."""
+def to_device(gm, dev):
+    """.to() moves parameters and buffers; an exported graph also keeps plain tensor constants."""
+    gm.to(dev)
+    for mod in gm.modules():
+        for k, v in list(vars(mod).items()):
+            if isinstance(v, torch.Tensor) and not isinstance(v, nn.Parameter) and v.device != torch.device(dev):
+                setattr(mod, k, v.to(dev))
+    return gm
+
+
+def build(student_sd, dilate, side, batch, model_src="ZhengPeng7/BiRefNet_lite", device="cpu"):
+    """The rewritten student as a fake-quantized GraphModule (fixed batch and side), exported on
+    `device` so the graph's constants live there too."""
     from transformers import AutoModelForImageSegmentation
     m = AutoModelForImageSegmentation.from_pretrained(model_src, trust_remote_code=True).float().eval()
     plain_student(m, dilate)
@@ -136,11 +147,11 @@ def build(student_sd, dilate, side, batch, model_src="ZhengPeng7/BiRefNet_lite")
     assert not unexpected and all(k.startswith("bb.") for k in missing), (unexpected[:3], missing[:3])
     reference_keys = set(m.state_dict())
     npu_graph(m)
-    w = Wrapped(m).eval()
-    x = torch.rand(batch, side, side, 3) * 255
+    w = Wrapped(m).eval().to(device)
+    x = torch.rand(batch, side, side, 3, device=device) * 255
     gm = torch.export.export(w, (x,), strict=False).module()
     acts, weights = fake_quantize(gm)
-    return gm, reference_keys, (acts, weights)
+    return to_device(gm, device), reference_keys, (acts, weights)
 
 
 def fq_modules(gm):

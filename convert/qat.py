@@ -18,7 +18,7 @@ int8.py still picks the final scales.
 import os, sys
 import torch
 import torch.nn as nn
-from torch.ao.quantization import FusedMovingAvgObsFakeQuantize, MovingAverageMinMaxObserver, MovingAveragePerChannelMinMaxObserver
+from torch.ao.quantization import FusedMovingAvgObsFakeQuantize, MovingAverageMinMaxObserver
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 
@@ -66,19 +66,31 @@ class Wrapped(nn.Module):
 
 
 class FQ(nn.Module):
-    """8-bit fake quantization, in float32 (the fused op wants it) whatever the input's type."""
-    def __init__(self, weight=False):
+    """8-bit fake quantization of an activation: per tensor, asymmetric, moving min/max; in float32
+    (the fused op wants it) whatever the input's type."""
+    def __init__(self):
         super().__init__()
-        if weight:
-            self.fq = FusedMovingAvgObsFakeQuantize(observer=MovingAveragePerChannelMinMaxObserver, quant_min=-127, quant_max=127,
-                                                    dtype=torch.qint8, qscheme=torch.per_channel_symmetric, ch_axis=0)
-        else:
-            self.fq = FusedMovingAvgObsFakeQuantize(observer=MovingAverageMinMaxObserver, quant_min=-128, quant_max=127,
-                                                    dtype=torch.qint8, qscheme=torch.per_tensor_affine)
-        self.weight = weight
+        self.fq = FusedMovingAvgObsFakeQuantize(observer=MovingAverageMinMaxObserver, quant_min=-128, quant_max=127,
+                                                dtype=torch.qint8, qscheme=torch.per_tensor_affine)
 
     def forward(self, x):
         return self.fq(x.float()).to(x.dtype)
+
+
+class WeightFQ(nn.Module):
+    """8-bit per-channel symmetric fake quantization of a weight, scaled by each output channel's
+    largest magnitude (as int8.py's quantizer does); no observer, the weight itself is the range.
+    Gradients pass straight through."""
+    def __init__(self):
+        super().__init__()
+        self.register_buffer("on", torch.tensor(False))
+
+    def forward(self, w):
+        if not bool(self.on): return w
+        wf = w.float()
+        scale = (wf.detach().abs().amax(dim=tuple(range(1, wf.dim()))) / 127).clamp(min=1e-8)
+        zero = torch.zeros_like(scale, dtype=torch.int32)
+        return torch.fake_quantize_per_channel_affine(wf, scale, zero, 0, -127, 127).to(w.dtype)
 
 
 # Ops that only move or view data: an int8 graph keeps their input's scale, nothing to round again.
@@ -119,7 +131,7 @@ def fake_quantize(gm):
             w = node.args[1]
             if isinstance(w, torch.fx.Node) and w.op == "get_attr":
                 name = f"fq_w{weights}"; weights += 1
-                gm.add_submodule(name, FQ(weight=True))
+                gm.add_submodule(name, WeightFQ())
                 with g.inserting_after(w):
                     q = g.call_module(name, (w,))
                 node.replace_input_with(w, q)
@@ -177,6 +189,8 @@ def observe(gm, on):
 def quantize(gm, on):
     for f in fq_modules(gm):
         f.enable_fake_quant() if on else f.disable_fake_quant()
+    for m in gm.modules():
+        if isinstance(m, WeightFQ): m.on.fill_(bool(on))
 
 
 def averaging(gm, c):

@@ -135,11 +135,15 @@ def to_device(gm, dev):
             if isinstance(v, torch.Tensor) and not isinstance(v, nn.Parameter) and v.device != torch.device(dev):
                 setattr(mod, k, v.to(dev))
     # Ops that make a tensor (arange, zeros, full, scalar_tensor...) carry the export's device.
-    moved = 0
+    target = torch.device(dev); moved = 0
+    def swap(a):
+        nonlocal moved
+        if isinstance(a, torch.device) and a != target:
+            moved += 1; return target
+        return a
     for node in gm.graph.nodes:
-        d = node.kwargs.get("device")
-        if d is not None and torch.device(d) != torch.device(dev):
-            node.update_kwarg("device", torch.device(dev)); moved += 1
+        node.args = torch.fx.node.map_aggregate(node.args, swap)
+        node.kwargs = torch.fx.node.map_aggregate(node.kwargs, swap)
     if moved: gm.recompile()
     return gm
 

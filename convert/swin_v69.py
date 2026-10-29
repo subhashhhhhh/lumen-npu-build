@@ -61,7 +61,7 @@ def block_forward(blk, x, h, w, window_partition, window_reverse, extra_pad=Fals
     if shift > 0:
         lead = ws - shift
         x = F.pad(x, (0, 0, lead, wp + ws - lead - w, lead, hp + ws - lead - h))
-        mask = shift_mask(h, w, ws, shift).to(x.dtype)
+        mask = shift_mask(h, w, ws, shift).to(device=x.device, dtype=x.dtype)
     else:
         # extra_pad: one more row and column of windows, all padding (exact: no real token sees them).
         lead, more = 0, ws if extra_pad else 0

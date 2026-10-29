@@ -72,6 +72,10 @@ class Wrapped(torch.nn.Module):
 
 import faulthandler, time
 faulthandler.dump_traceback_later(300, repeat=True)  # a stuck convert shows where it is
+import threading, os
+_stuck = threading.Timer(1000, lambda: (print('convert stuck: giving up after 1000 s', flush=True), faulthandler.dump_traceback(all_threads=True), os._exit(3)))
+_stuck.daemon = True
+_stuck.start()
 _t0 = time.time()
 print('converting', flush=True)
 import litert_torch
@@ -85,6 +89,7 @@ x = picture()
 edge = litert_torch.convert(wrapped, (x,))
 edge.export(out)
 print('converted in', round(time.time() - _t0), 's', flush=True)
+faulthandler.cancel_dump_traceback_later()
 # The phone checks its run against PyTorch's: a test picture and the mask for it (raw float32).
 with torch.no_grad():
     want = wrapped(x).numpy()

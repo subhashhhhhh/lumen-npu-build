@@ -1,0 +1,57 @@
+name: Integer cutout model for NPUs
+on:
+  workflow_dispatch:
+    inputs:
+      model:
+        description: LiteRT model in the inputs release (float32)
+        default: birefnet_student_512
+      schemes:
+        description: Space separated - a8w8 (8-bit activations and weights), a16w8 (16-bit activations)
+        default: a8w8 a16w8
+      calibration:
+        description: COCO val photos to calibrate on
+        default: "64"
+      check:
+        description: Other COCO val photos to check against the float model
+        default: "100"
+permissions:
+  contents: write
+jobs:
+  schemes:
+    runs-on: ubuntu-22.04
+    outputs:
+      list: ${{ steps.list.outputs.list }}
+    steps:
+      - id: list
+        run: echo "list=$(echo '${{ inputs.schemes }}' | xargs -n1 | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+  # One runner per scheme: calibrating and checking a 512 BiRefNet on a CPU takes a while.
+  quantize:
+    needs: schemes
+    runs-on: ubuntu-22.04
+    strategy:
+      fail-fast: false
+      matrix:
+        scheme: ${{ fromJSON(needs.schemes.outputs.list) }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+      - run: pip install --quiet ai-edge-quantizer ai-edge-litert pillow
+      - name: Download the model and COCO's validation photos
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download inputs --dir in -p "${{ inputs.model }}.tflite"
+          curl -sSfL -o val2017.zip http://images.cocodataset.org/zips/val2017.zip
+          unzip -q val2017.zip && rm val2017.zip
+      - name: Quantize and check
+        run: |
+          free -h | head -2
+          python convert/int8.py "in/${{ inputs.model }}.tflite" "${{ inputs.model }}_${{ matrix.scheme }}.tflite" ${{ matrix.scheme }} val2017 ${{ inputs.calibration }} ${{ inputs.check }} | tee report.txt
+      - name: Put it in the inputs release (for the compile workflow)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp report.txt "${{ inputs.model }}_${{ matrix.scheme }}_report.txt"
+          gh release upload inputs "${{ inputs.model }}_${{ matrix.scheme }}.tflite" "${{ inputs.model }}_${{ matrix.scheme }}_report.txt" --clobber

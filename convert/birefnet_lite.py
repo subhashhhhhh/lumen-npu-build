@@ -52,6 +52,10 @@ birefnet_npu_rewrites.apply(model)
 # The decoder's 960-3072-channel convolutions as input-channel slices (exact): their weights fit the
 # Snapdragon 7 Gen 1 / 8 Gen 1 NPU's on-chip memory.
 print("split convolutions:", birefnet_npu_rewrites.split_wide_convs(model), flush=True)
+# Roll-free shifted windows, and one extra padding window where the 2 MB (7 Gen 1) compiler crashes:
+# Swin stage 3's plain block at 16x16, in the half-resolution pass of a 512 input. Both exact.
+import swin_v69
+swin_v69.apply(model)
 
 
 class Wrapped(torch.nn.Module):

@@ -85,3 +85,16 @@ def basic_layer_forward(layer, x, h, w, window_partition=None, window_reverse=No
     if layer.downsample is not None:
         return x, h, w, layer.downsample(x, h, w), (h + 1) // 2, (w + 1) // 2
     return x, h, w, x, h, w
+
+
+def needs_extra_pad(h, w, c):
+    """Where the 2 MB (Snapdragon 7 Gen 1) compiler crashes: a plain block of Swin-T's stage 3 at
+    16x16 (the half-resolution pass of a 512 input), padded to 3x3 windows. One more row and column
+    of padding windows (exact) avoids it."""
+    return (h, w, c) == (16, 16, 384)
+
+
+def apply(model):
+    """Swaps BasicLayer.forward for the roll-free version, with the extra padding where needed."""
+    lay = next(m for m in model.modules() if type(m).__name__ == "BasicLayer")
+    type(lay).forward = lambda self, x, H, W: basic_layer_forward(self, x, H, W, extra_pad=needs_extra_pad(H, W, x.shape[-1]))

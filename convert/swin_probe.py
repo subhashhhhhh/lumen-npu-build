@@ -82,7 +82,9 @@ def full_model(v69, plain=True, split=False):
     rw.apply(m)
     if split:
         print("split convolutions:", rw.split_wide_convs(m), flush=True)
-    if v69:
+    if v69 == "fix":
+        swin_v69.apply(m)
+    elif v69:
         lay = next(x for x in m.modules() if type(x).__name__ == "BasicLayer")
         type(lay).forward = lambda self, x, H, W: swin_v69.basic_layer_forward(self, x, H, W)
     return m
@@ -184,6 +186,8 @@ probes = {
     # The v69 ones patch BasicLayer for good, so they come last.
     "bb512_v69": lambda: export("bb512_v69", Backbone(full_model(True)), torch.randn(1, 3, 512, 512)),
     "full512_v69_split": lambda: export("full512_v69_split", Full(full_model(True, split=True)), torch.randn(1, 3, 512, 512)),
+    "full512_fix": lambda: export("full512_fix", Full(full_model("fix", split=True)), torch.randn(1, 3, 512, 512)),
+    "full256_fix": lambda: export("full256_fix", Full(full_model("fix", split=True)), torch.randn(1, 3, 256, 256)),
     "full512_v69": lambda: export("full512_v69", Full(full_model(True)), torch.randn(1, 3, 512, 512)),
 }
 for name, make in probes.items():

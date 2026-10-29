@@ -50,7 +50,7 @@ def shift_mask(h, w, ws, shift):
     return _masks[key]
 
 
-def block_forward(blk, x, h, w, window_partition, window_reverse):
+def block_forward(blk, x, h, w, window_partition, window_reverse, extra_pad=False):
     b, l, c = x.shape
     ws, shift = blk.window_size, blk.shift_size
     shortcut = x
@@ -61,8 +61,9 @@ def block_forward(blk, x, h, w, window_partition, window_reverse):
         x = F.pad(x, (0, 0, lead, wp + ws - lead - w, lead, hp + ws - lead - h))
         mask = shift_mask(h, w, ws, shift).to(x.dtype)
     else:
-        lead = 0
-        x = F.pad(x, (0, 0, 0, wp - w, 0, hp - h))
+        # extra_pad: one more row and column of windows, all padding (exact: no real token sees them).
+        lead, more = 0, ws if extra_pad else 0
+        x = F.pad(x, (0, 0, 0, wp - w + more, 0, hp - h + more))
         mask = None
     _, ph, pw, _ = x.shape
     windows = window_partition(x, ws).reshape(-1, ws * ws, c)
@@ -73,14 +74,14 @@ def block_forward(blk, x, h, w, window_partition, window_reverse):
     return x + blk.drop_path(blk.mlp(blk.norm2(x)))
 
 
-def basic_layer_forward(layer, x, h, w, window_partition=None, window_reverse=None):
+def basic_layer_forward(layer, x, h, w, window_partition=None, window_reverse=None, extra_pad=False):
     """BasicLayer.forward with the roll-free shifted blocks."""
     import sys
     mod = sys.modules[type(layer).__module__]
     wp_, wr_ = window_partition or mod.window_partition, window_reverse or mod.window_reverse
     for blk in layer.blocks:
         blk.H, blk.W = h, w
-        x = block_forward(blk, x, h, w, wp_, wr_)
+        x = block_forward(blk, x, h, w, wp_, wr_, extra_pad)
     if layer.downsample is not None:
         return x, h, w, layer.downsample(x, h, w), (h + 1) // 2, (w + 1) // 2
     return x, h, w, x, h, w

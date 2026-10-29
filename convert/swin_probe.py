@@ -36,14 +36,16 @@ def export(name, module, *inputs):
 
 class Stage(nn.Module):
     """One Swin stage (a plain block, then a shifted one), tokens in and out."""
-    def __init__(self, dim, heads, hw, impl):
+    def __init__(self, dim, heads, hw, impl, depth=2):
         super().__init__()
-        self.layer = bn.BasicLayer(dim=dim, depth=2, num_heads=heads, window_size=7)
+        self.layer = bn.BasicLayer(dim=dim, depth=depth, num_heads=heads, window_size=7)
         self.hw, self.impl = hw, impl
 
     def forward(self, x):
         if self.impl == "v69":
             return swin_v69.basic_layer_forward(self.layer, x, self.hw, self.hw)[0]
+        if self.impl == "pad28":
+            return swin_v69.basic_layer_forward(self.layer, x, self.hw, self.hw, extra_pad=True)[0]
         return self.layer(x, self.hw, self.hw)[0]
 
 
@@ -162,6 +164,9 @@ probes = {
     "st3_16": lambda: export("st3_16", Stage(384, 12, 16, "orig"), torch.randn(1, 16 * 16, 384)),
     "st4_8": lambda: export("st4_8", Stage(768, 24, 8, "orig"), torch.randn(1, 8 * 8, 768)),
     "st4_16": lambda: export("st4_16", Stage(768, 24, 16, "orig"), torch.randn(1, 16 * 16, 768)),
+    "st3_16_plain": lambda: export("st3_16_plain", Stage(384, 12, 16, "orig", depth=1), torch.randn(1, 16 * 16, 384)),
+    "st3_16_v69": lambda: export("st3_16_v69", Stage(384, 12, 16, "v69"), torch.randn(1, 16 * 16, 384)),
+    "st3_16_pad28": lambda: export("st3_16_pad28", Stage(384, 12, 16, "pad28"), torch.randn(1, 16 * 16, 384)),
     "bb256": lambda: export("bb256", Backbone(full_model(False)), torch.randn(1, 3, 256, 256)),
     "bb128": lambda: export("bb128", Backbone(full_model(False)), torch.randn(1, 3, 128, 128)),
     "sqonly256": lambda: export("sqonly256", SqueezeOnly(full_model(False, split=True)), torch.randn(1, 2880, 8, 8)),

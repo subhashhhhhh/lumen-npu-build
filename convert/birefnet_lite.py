@@ -23,12 +23,17 @@ Side = int(sys.argv[2]) if len(sys.argv) > 2 else 1024
 path = snapshot_download("ZhengPeng7/BiRefNet_lite")
 model = AutoModelForImageSegmentation.from_pretrained(path, trust_remote_code=True).float().eval()
 Student = sys.argv[3] if len(sys.argv) > 3 else ""
+# Dilate: the 7x7 plain convolutions' dilation (v3). The deformable 7x7s sampled 6-10 px off-grid
+# (p99); a plain 7x7 reaches 3 px, dilation d reaches 3d. Same weight shape, so v2 loads as is.
+Dilate = int(sys.argv[4]) if len(sys.argv) > 4 else 1
 if Student:
     class PlainConv(torch.nn.Module):
         def __init__(self, deform):
             super().__init__()
             rc = deform.regular_conv
-            self.conv = torch.nn.Conv2d(rc.in_channels, rc.out_channels, rc.kernel_size, padding=deform.padding, bias=rc.bias is not None)
+            k = rc.kernel_size[0]
+            d = Dilate if k == 7 else 1
+            self.conv = torch.nn.Conv2d(rc.in_channels, rc.out_channels, rc.kernel_size, padding=d * (k // 2), dilation=d, bias=rc.bias is not None)
 
         def forward(self, x):
             return self.conv(x)

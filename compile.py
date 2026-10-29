@@ -1,4 +1,4 @@
-"""Ahead-of-time compiles a .tflite model for one Qualcomm chip with LiteRT's compiler."""
+"""Ahead-of-time compiles a .tflite model for one Qualcomm (SM…) or MediaTek (MT…) chip with LiteRT's compiler."""
 import os, pathlib, sys
 from ai_edge_litert.aot import aot_compile
 from ai_edge_litert.aot.vendors.qualcomm import target as qnn
@@ -32,8 +32,13 @@ subprocess.run = _logged_run
 
 model, chip, out = sys.argv[1], sys.argv[2], pathlib.Path(sys.argv[3])
 out.mkdir(parents=True, exist_ok=True)
+if chip.startswith("MT"):
+    from ai_edge_litert.aot.vendors.mediatek import target as mtk
+    target = mtk.Target(soc_model=mtk.SocModel(chip))
+else:
+    target = qnn.Target(soc_model=soc(chip))
 try:
-    result = aot_compile.aot_compile(model, output_dir=out, target=qnn.Target(soc_model=soc(chip)), keep_going=False)
+    result = aot_compile.aot_compile(model, output_dir=out, target=target, keep_going=False)
 except ValueError as e:
     # The plugin's own message is in a file the exception only names: show its end.
     import re

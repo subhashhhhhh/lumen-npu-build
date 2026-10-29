@@ -1,10 +1,15 @@
-name: Compile for Qualcomm NPUs
+name: Compile for Qualcomm and MediaTek NPUs
 on:
   workflow_dispatch:
     inputs:
+      vendor:
+        description: Whose NPUs, when no chips are given
+        type: choice
+        options: [qualcomm, mediatek]
+        default: qualcomm
       socs:
-        description: Chips, space separated (default - every phone chip LiteRT's Qualcomm compiler knows)
-        default: SM4250 SM4350 SM4375 SM4450 SM4635 SM6115 SM6125 SM6150 SM6225 SM6250 SM6350 SM6375 SM6450 SM6450Q SM6475 SM6650 SM7150 SM7225 SM7250 SM7315 SM7325 SM7350 SM7435 SM7450 SM7475 SM7550 SM7635 SM7675 SM7750 SM8325 SM8350 SM8350P SM8450 SM8475 SM8550 SM8635 SM8650 SM8735 SM8750 SM8845 SM8845P SM8850
+        description: Chips, space separated (SM… Qualcomm, MT… MediaTek); empty - every phone chip of the vendor
+        default: ""
       models:
         description: Models in the inputs release, space separated
         default: siglip_visual ocr_det
@@ -27,7 +32,14 @@ jobs:
       list: ${{ steps.list.outputs.list }}
     steps:
       - id: list
-        run: echo "list=$(echo '${{ inputs.socs }}' | xargs -n1 | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
+        env:
+          # Every phone chip LiteRT's compilers know.
+          QUALCOMM: SM4250 SM4350 SM4375 SM4450 SM4635 SM6115 SM6125 SM6150 SM6225 SM6250 SM6350 SM6375 SM6450 SM6450Q SM6475 SM6650 SM7150 SM7225 SM7250 SM7315 SM7325 SM7350 SM7435 SM7450 SM7475 SM7550 SM7635 SM7675 SM7750 SM8325 SM8350 SM8350P SM8450 SM8475 SM8550 SM8635 SM8650 SM8735 SM8750 SM8845 SM8845P SM8850
+          MEDIATEK: MT6853 MT6877 MT6878 MT6879 MT6886 MT6893 MT6895 MT6897 MT6983 MT6985 MT6989 MT6991 MT6993 MT8171 MT8188 MT8189
+        run: |
+          socs='${{ inputs.socs }}'
+          [ -n "$socs" ] || { [ '${{ inputs.vendor }}' = mediatek ] && socs=$MEDIATEK || socs=$QUALCOMM; }
+          echo "list=$(echo "$socs" | xargs -n1 | jq -R . | jq -sc .)" >> "$GITHUB_OUTPUT"
   # One runner per chip, all at once: a large model takes minutes per chip, so one runner doing
   # every chip in turn took hours.
   compile:
@@ -45,14 +57,16 @@ jobs:
         id: python
         with:
           python-version: "3.11"
+      - id: vendor
+        run: echo "sdk=$(case '${{ matrix.soc }}' in MT*) echo mediatek;; *) echo qualcomm;; esac)" >> "$GITHUB_OUTPUT"
       # pip builds Qualcomm's SDK into a 2.6 GB wheel for ~10 minutes; keep the installed result instead.
       - uses: actions/cache@v4
         id: cache
         with:
           path: ${{ env.pythonLocation }}
-          key: litert-2.3.0-${{ steps.python.outputs.python-version }}
+          key: litert-2.3.0-${{ steps.vendor.outputs.sdk == 'mediatek' && 'mediatek-' || '' }}${{ steps.python.outputs.python-version }}
       - if: steps.cache.outputs.cache-hit != 'true'
-        run: pip install --no-cache-dir ai-edge-litert==2.3.0 ai-edge-litert-sdk-qualcomm==2.3.0
+        run: pip install --no-cache-dir ai-edge-litert==2.3.0 ai-edge-litert-sdk-${{ steps.vendor.outputs.sdk }}==2.3.0
       - name: Download the models
         run: for model in ${{ inputs.models }}; do gh release download inputs --dir in --pattern "$model.tflite"; done
         env:
@@ -94,8 +108,8 @@ jobs:
           for dir in out/*/; do
             soc=$(basename "$dir"); mkdir "hf/$soc"
             for f in "$dir"*.tflite; do
-              # Moved, not copied: 40 chips' models are ~8 GB, more than the runner has twice over.
-              name=$(basename "$f"); mv "$f" "hf/$soc/${name%%_Qualcomm_*}.tflite"
+              # <model>_<Vendor>_<chip>….tflite → <model>.tflite. Moved, not copied: 40 chips' models are ~8 GB, more than the runner has twice over.
+              name=$(basename "$f"); name=${name%%_Qualcomm_*}; mv "$f" "hf/$soc/${name%%_MediaTek_*}.tflite"
             done
           done
           ls -R hf | head -40

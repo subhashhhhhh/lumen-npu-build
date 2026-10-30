@@ -162,15 +162,16 @@ def to_device(gm, dev):
     return gm
 
 
-def build(student_sd, dilate, side, batch, model_src="ZhengPeng7/BiRefNet_lite", device="cpu"):
-    """The rewritten student as a fake-quantized GraphModule (fixed batch and side) on `device`."""
+def build(student_sd, dilate, side, batch, model_src="ZhengPeng7/BiRefNet_lite", device="cpu", attention="4d"):
+    """The rewritten student as a fake-quantized GraphModule (fixed batch and side) on `device`.
+    attention: "4d" or "heads" (the faster per-head layout; must match the one converted for the phone)."""
     from transformers import AutoModelForImageSegmentation
     m = AutoModelForImageSegmentation.from_pretrained(model_src, trust_remote_code=True).float().eval()
     plain_student(m, dilate)
     missing, unexpected = m.load_state_dict({k: v.float() for k, v in student_sd.items()}, strict=False)
     assert not unexpected and all(k.startswith("bb.") for k in missing), (unexpected[:3], missing[:3])
     reference_keys = set(m.state_dict())
-    npu_graph(m)
+    npu_graph(m, attention)
     w = Wrapped(m).eval()
     x = torch.rand(batch, side, side, 3) * 255
     # Exported on the CPU (part of the rewritten graph builds CPU tensors), then moved.

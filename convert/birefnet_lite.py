@@ -32,6 +32,8 @@ Attention = sys.argv[5] if len(sys.argv) > 5 else "4d"
 # mask at Side. mode: tail (no new weights) or patches (full-size patches everywhere; needs training).
 BBSide = int(sys.argv[6]) if len(sys.argv) > 6 and sys.argv[6] else Side
 HybridMode = sys.argv[7] if len(sys.argv) > 7 else "tail"
+# v4 graph (v4.py): a comma list of two, slim, global4, nohalf; "-" or absent = not v4.
+V4 = sys.argv[8] if len(sys.argv) > 8 and sys.argv[8] != "-" else None
 if Student:
     class PlainConv(torch.nn.Module):
         def __init__(self, deform):
@@ -61,7 +63,10 @@ sys.path.insert(0, __import__("os").path.dirname(__file__))
 import birefnet_npu_rewrites
 birefnet_npu_rewrites.apply(model, Attention)
 print("attention layout:", Attention, flush=True)
-if BBSide != Side:
+if V4 is not None:
+    import v4
+    print("v4 options:", sorted(v4.apply(model, Side, BBSide, V4)), "backbone", BBSide, "mask", Side, flush=True)
+elif BBSide != Side:
     import hybrid
     hybrid.apply(model, Side, BBSide, HybridMode)
     print("split resolution: backbone", BBSide, "decoder and mask", Side, "mode", HybridMode, flush=True)
@@ -95,6 +100,8 @@ _stuck.start()
 _t0 = time.time()
 print('converting', flush=True)
 import litert_torch
+if V4 is not None:
+    Wrapped = v4.Wrapped
 wrapped = Wrapped(model).eval()
 rng = np.random.default_rng(0)
 # Smooth synthetic pictures (blurred noise), not real photos: those stay on the owner's machines.
@@ -102,14 +109,19 @@ def picture():
     x = torch.from_numpy(rng.uniform(0, 255, (1, 3, 64, 64)).astype(np.float32))
     return F.interpolate(x, size=(Side, Side), mode="bicubic").clamp(0, 255).permute(0, 2, 3, 1).contiguous()
 x = picture()
-edge = litert_torch.convert(wrapped, (x,))
+args = (x,)
+if V4 is not None and "two" in V4.split(","):
+    xb = F.interpolate(x.permute(0, 3, 1, 2), size=(BBSide, BBSide), mode="bilinear", antialias=True).permute(0, 2, 3, 1).contiguous()
+    args = (x, xb)
+edge = litert_torch.convert(wrapped, args)
 edge.export(out)
 print('converted in', round(time.time() - _t0), 's', flush=True)
 faulthandler.cancel_dump_traceback_later()
 # The phone checks its run against PyTorch's: a test picture and the mask for it (raw float32).
 with torch.no_grad():
-    want = wrapped(x).numpy()
+    want = wrapped(*args).numpy()
 stem = out.removesuffix(".tflite")
-x.numpy().astype("<f4").tofile(f"{stem}_input.bin")
+for k, t in enumerate(args):
+    t.numpy().astype("<f4").tofile(f"{stem}_input.bin" if k == 0 else f"{stem}_input{k}.bin")
 want.astype("<f4").tofile(f"{stem}_reference.bin")
 print("reference mask: mean", float(want.mean()), "share above 0.5", float((want > 0.5).mean()), flush=True)

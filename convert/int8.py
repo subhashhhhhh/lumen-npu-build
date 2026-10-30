@@ -20,17 +20,26 @@ bits = {"a8w8": 8, "a16w8": 16}[scheme]
 probe = Interpreter(model_path=src)
 signature = next(iter(probe.get_signature_list()))
 runner = probe.get_signature_runner(signature)
-input_name = next(iter(runner.get_input_details()))
-side = runner.get_input_details()[input_name]["shape"][1]
+# One or more inputs (split resolution takes the photo twice, at the decoder's and the backbone's side),
+# biggest first: each gets the same photo at its own side.
+sides = {n: int(d["shape"][1]) for n, d in runner.get_input_details().items()}
+input_names = sorted(sides, key=lambda n: -sides[n])
+input_name = input_names[0]
+side = sides[input_name]
+print("inputs:", {n: sides[n] for n in input_names}, flush=True)
 del runner, probe
 
 files = sorted(os.path.join(photos, f) for f in os.listdir(photos) if f.lower().endswith(".jpg"))
 calib_files, check_files = files[:calib_n], files[calib_n:calib_n + check_n]
 
 
-def load(path):
+def load(path, side=side):
     # What Lumen feeds it: the photo stretched to a square, raw RGB 0-255.
     return np.asarray(Image.open(path).convert("RGB").resize((side, side), Image.BILINEAR), np.float32)[None]
+
+
+def feed(path):
+    return {n: load(path, sides[n]) for n in input_names}
 
 
 q = quantizer.Quantizer(src)
@@ -38,7 +47,7 @@ q.add_static_config(regex=".*", operation_name=qtyping.TFLOperationName.ALL_SUPP
                     activation_num_bits=bits, weight_num_bits=8)
 start = time.time()
 # A list, not a generator: the calibrator walks the data more than once.
-samples = [{input_name: load(f)} for f in calib_files]
+samples = [feed(f) for f in calib_files]
 print(f"{len(files)} photos found; calibrating on {len(samples)}", flush=True)
 calibration = q.calibrate({signature: samples}, num_threads=os.cpu_count(),
                           mode=calibrator.CalibrationMode.CALIBRATION_PROFILER_BASED)
@@ -51,22 +60,28 @@ def masks(path, images):
     it = Interpreter(model_path=path, num_threads=os.cpu_count())
     run = it.get_signature_runner(signature)
     # A quantized model takes and gives integers: scale the photo in and the mask out.
-    i = run.get_input_details()[input_name]
+    details = run.get_input_details()
+    i = details[input_name]
     o = next(iter(run.get_output_details().values()))
     (i_scale, i_zero), (o_scale, o_zero) = i["quantization"], o["quantization"]
     print(f"{os.path.basename(path)}: input {i['dtype'].__name__} {i['quantization']}, output {o['dtype'].__name__} {o['quantization']}", flush=True)
     out, start = [], time.time()
     for image in images:
-        if i_scale:
-            info = np.iinfo(i["dtype"])
-            image = np.clip(np.round(image / i_scale + i_zero), info.min, info.max).astype(i["dtype"])
-        mask = next(iter(run(**{input_name: image}).values())).ravel()
+        args = {}
+        for n, x in image.items():
+            d = details[n]
+            sc, zp = d["quantization"]
+            if sc:
+                info = np.iinfo(d["dtype"])
+                x = np.clip(np.round(x / sc + zp), info.min, info.max).astype(d["dtype"])
+            args[n] = x
+        mask = next(iter(run(**args).values())).ravel()
         out.append((mask.astype(np.float32) - o_zero) * o_scale if o_scale else mask)
     print(f"{os.path.basename(path)}: {(time.time() - start) / len(images):.1f} s a photo on this CPU", flush=True)
     return out
 
 
-images = [load(f) for f in check_files]
+images = [feed(f) for f in check_files]
 want, got = masks(src, images), masks(dst, images)
 
 

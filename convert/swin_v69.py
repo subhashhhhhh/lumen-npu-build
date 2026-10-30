@@ -55,10 +55,10 @@ def shift_mask(h, w, ws, shift):
 def block_forward(blk, x, h, w, window_partition, window_reverse, extra_pad=False):
     b, l, c = x.shape
     ws, shift = blk.window_size, blk.shift_size
+    rpi = None
     if getattr(blk, "glob", False):  # v4 global4: the whole (small) map is one window, no shift
-        import v4
         ws, shift = max(h, w), 0
-        blk.attn.relative_position_index = v4.global_index(ws, blk.attn.glob_w, x.device)
+        rpi = getattr(blk.attn, f"gidx{ws}")  # registered by v4.apply for this size
         extra_pad = False
     shortcut = x
     x = blk.norm1(x).view(b, h, w, c)
@@ -74,7 +74,7 @@ def block_forward(blk, x, h, w, window_partition, window_reverse, extra_pad=Fals
         mask = None
     _, ph, pw, _ = x.shape
     windows = window_partition(x, ws).reshape(-1, ws * ws, c)
-    windows = blk.attn(windows, mask=mask)
+    windows = blk.attn(windows, mask=mask) if rpi is None else blk.attn(windows, mask=mask, rpi=rpi)
     x = window_reverse(windows.reshape(-1, ws, ws, c), ws, ph, pw)
     x = x[:, lead:lead + h, lead:lead + w, :].reshape(b, h * w, c)
     x = shortcut + blk.drop_path(x)

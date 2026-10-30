@@ -60,7 +60,7 @@ def window_reverse(windows, window_size, h, w):
     return x.permute(0, 2, 1, 3).reshape(b, h, w, c)
 
 
-def attention_forward(self, x, mask=None):
+def attention_forward(self, x, mask=None, rpi=None):
     """Swin window attention with q, k and v split along the last axis (no 5-D reshape) and the
     shift mask added per window in 4 dimensions."""
     b_, n, c = x.shape
@@ -70,7 +70,7 @@ def attention_forward(self, x, mask=None):
     k = k.reshape(b_, n, heads, c // heads).permute(0, 2, 1, 3)
     v = v.reshape(b_, n, heads, c // heads).permute(0, 2, 1, 3)
     attn = q @ k.transpose(-2, -1)
-    bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(
+    bias = self.relative_position_bias_table[(self.relative_position_index if rpi is None else rpi).view(-1)].view(
         self.window_size[0] * self.window_size[1], self.window_size[0] * self.window_size[1], -1)
     attn = attn + bias.permute(2, 0, 1).unsqueeze(0)
     if mask is not None:
@@ -80,7 +80,7 @@ def attention_forward(self, x, mask=None):
     return self.proj_drop(self.proj(x))
 
 
-def attention_forward_heads(self, x, mask=None):
+def attention_forward_heads(self, x, mask=None, rpi=None):
     """The same window attention one head at a time, in 3 dimensions: no reshape or transpose of
     q, k, v or the attention map (on the 7 Gen 1 NPU those layout shuffles cost about a fifth of
     the whole model at int8). Heads are channel slices of qkv, as in the original; the outputs are
@@ -89,7 +89,7 @@ def attention_forward_heads(self, x, mask=None):
     b_, n, c = x.shape
     heads, d = self.num_heads, c // self.num_heads
     qkv = self.qkv(x)                                                  # (b_, n, 3c)
-    bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(n, n, heads)
+    bias = self.relative_position_bias_table[(self.relative_position_index if rpi is None else rpi).view(-1)].view(n, n, heads)
     nw = mask.shape[0] if mask is not None else b_
     outs = []
     for h in range(heads):

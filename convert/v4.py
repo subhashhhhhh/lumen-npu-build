@@ -42,6 +42,7 @@ def _decoder_forward(self, features, img_stage, img_final):
         if cfg.out_ref:
             p4 = p4 * self.gdt_convs_attn_4(self.gdt_convs_4(p4)).sigmoid()
         _p3 = F.interpolate(p4, size=x3.shape[2:], mode="bilinear", align_corners=True) + self.lateral_block4(x3)
+    aux = p4 if (self.aux and x4 is not None) else None
     _p3 = torch.cat((_p3, ipt(self.ipt_blk4, img_stage, _p3, x3.shape[2:])), 1)
     p3 = self.decoder_block3(_p3)
     if cfg.out_ref:
@@ -58,7 +59,7 @@ def _decoder_forward(self, features, img_stage, img_final):
         _p1 = self.tail_squeeze(_p1)  # at low resolution: the expensive part never sees 96 channels
     _p1 = F.interpolate(_p1, size=img_final.shape[2:], mode="bilinear", align_corners=True)
     _p1 = torch.cat((_p1, ipt(self.ipt_blk1, img_final, _p1, img_final.shape[2:])), 1)
-    return [self.conv_out1(_p1)]
+    return [self.conv_out1(_p1)] if aux is None else [aux, self.conv_out1(_p1)]
 
 
 def _slim(dec):
@@ -78,10 +79,12 @@ def _slim(dec):
     dec.conv_out1 = nn.Sequential(out)
 
 
-def _global4(model):
-    """Stage 4 as one window: bias table for offsets up to +-19 (a 20x20 window), index per size."""
+def _global4(model, bb_side, nohalf):
+    """Stage 4 as one window: bias table for offsets up to +-(W-1), W = stage 4's side (20 at 640);
+    the index for each map size it meets (full pass, half pass) as non-saved buffers."""
     layer = model.bb.layers[3]
-    W = 20
+    W = bb_side // 32
+    sizes = [W] if nohalf else [W, W // 2]
     for blk in layer.blocks:
         a = blk.attn
         t = a.relative_position_bias_table.data              # (13*13, heads)
@@ -91,6 +94,8 @@ def _global4(model):
         g = F.pad(g, (pad, pad, pad, pad), mode="replicate")   # far offsets take the edge values
         a.relative_position_bias_table = nn.Parameter(g.reshape(-1, (2 * W - 1) ** 2).t().contiguous())
         a.glob_w = W
+        for n in sizes:
+            a.register_buffer(f"gidx{n}", global_index(n, W), persistent=False)
         blk.glob = True
 
 
@@ -132,22 +137,24 @@ def _forward_enc_v4(self, x):
     return (x1, x2, x3, x4), None
 
 
-def apply(model, side, bb_side, options=""):
+def apply(model, side, bb_side, options="", aux=False):
+    """aux: the decoder also returns stage 4's gated features first (training: feature loss, gate watch)."""
     """After loading weights, before the NPU rewrites' split_wide_convs and swin_v69 (which reads
     blk.glob). Returns the option set."""
     import sys
     opts = set(o for o in options.split(",") if o)
     assert opts <= {"two", "slim", "global4", "nohalf", "prune4"}, opts
     assert not {"global4", "prune4"} <= opts, "global4 and prune4 exclude each other"
-    rewrites = sys.modules.get("birefnet_npu_rewrites")
-    globals()["image2patches"] = rewrites.image2patches if rewrites else sys.modules[type(model).__module__].image2patches
+    import birefnet_npu_rewrites as rewrites
+    globals()["image2patches"] = rewrites.image2patches
     dec = model.decoder
+    dec.aux = aux
     dec.slim = "slim" in opts
     if dec.slim:
         _slim(dec)
     dec.forward = types.MethodType(_decoder_forward, dec)
     if "global4" in opts:
-        _global4(model)
+        _global4(model, bb_side, "nohalf" in opts)
     model.v4_nohalf, model.v4_prune4 = "nohalf" in opts, "prune4" in opts
     if model.v4_prune4:
         model.bb.forward = types.MethodType(_bb_forward3, model.bb)
@@ -169,12 +176,33 @@ def apply(model, side, bb_side, options=""):
 
 
 class Wrapped(nn.Module):
-    """Raw RGB 0-255 NHWC in (one input, or the full-size and backbone-size photos), mask NHWC out."""
-    def __init__(self, net):
-        super().__init__(); self.net = net
+    """Raw RGB 0-255 NHWC in (one input, or the full-size and backbone-size photos), mask NHWC out.
+    aux: (mask, stage 4's gated features) for training."""
+    def __init__(self, net, aux=False):
+        super().__init__(); self.net = net; self.aux = aux
         self.register_buffer("mean", torch.tensor([0.485, 0.456, 0.406]).view(1, 3, 1, 1) * 255)
         self.register_buffer("std", torch.tensor([0.229, 0.224, 0.225]).view(1, 3, 1, 1) * 255)
 
     def forward(self, x, xb=None):
         n = lambda t: (t.permute(0, 3, 1, 2) - self.mean) / self.std
-        return self.net(n(x), None if xb is None else n(xb))[-1].sigmoid().permute(0, 2, 3, 1)
+        out = self.net(n(x), None if xb is None else n(xb))
+        mask = out[-1].sigmoid().permute(0, 2, 3, 1)
+        return (mask, out[0]) if self.aux else mask
+
+
+BRANCH = ("squeeze_module.", "decoder.decoder_block4.", "decoder.gdt_convs_4.", "decoder.gdt_convs_attn_4.",
+          "decoder.ipt_blk5.", "bb.layers.3.", "bb.norm3.")
+
+
+def revive_stage4(student, teacher):
+    """The dead stage-4 branch back from the teacher (call before apply). Deformable convolutions map
+    to the student's plain ones through their regular_conv weights (offsets dropped)."""
+    tsd, n = teacher.state_dict(), 0
+    with torch.no_grad():
+        for k, v in student.state_dict().items():
+            if not k.startswith(BRANCH):
+                continue
+            tk = k if k in tsd else k.replace(".conv.weight", ".regular_conv.weight").replace(".conv.bias", ".regular_conv.bias")
+            if tk in tsd and tsd[tk].shape == v.shape:
+                v.copy_(tsd[tk]); n += 1
+    return n

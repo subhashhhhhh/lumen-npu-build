@@ -180,6 +180,35 @@ def build(student_sd, dilate, side, batch, model_src="ZhengPeng7/BiRefNet_lite",
     return to_device(gm, device), reference_keys, (acts, weights)
 
 
+def build_v4(student_sd, dilate, side, bb_side, batch, opts, model_src="ZhengPeng7/BiRefNet_lite", device="cpu",
+             attention="heads", revive=None, aux=False):
+    """build() for the v4 graph (v4.py options; two inputs if "two"). student_sd: an old-shape
+    checkpoint (loaded before the v4 changes, which then start from it) or a v4-shape one (loaded after).
+    revive: a teacher model to copy the dead stage-4 branch from. aux: also output stage 4's features."""
+    import v4
+    from transformers import AutoModelForImageSegmentation
+    m = AutoModelForImageSegmentation.from_pretrained(model_src, trust_remote_code=True).float().eval()
+    plain_student(m, dilate)
+    own = m.state_dict()
+    fits = all(k in own and own[k].shape == v.shape for k, v in student_sd.items())
+    def load():
+        missing, unexpected = m.load_state_dict({k: v.float() for k, v in student_sd.items()}, strict=False)
+        assert not unexpected and all(k.startswith("bb.") for k in missing), (unexpected[:3], missing[:3])
+    if fits: load()
+    revived = v4.revive_stage4(m, revive) if revive is not None else 0
+    v4.apply(m, side, bb_side, opts, aux=aux)
+    if not fits: load()
+    reference_keys = set(m.state_dict())
+    npu_graph(m, attention)
+    w = v4.Wrapped(m, aux).eval()
+    args = (torch.rand(batch, side, side, 3) * 255,)
+    if "two" in opts.split(","):
+        args += (torch.rand(batch, bb_side, bb_side, 3) * 255,)
+    gm = torch.export.export(w, args, strict=False).module()
+    acts, weights = fake_quantize(gm)
+    return to_device(gm, device), reference_keys, (acts, weights, revived)
+
+
 def fq_modules(gm):
     return [m.fq for m in gm.modules() if isinstance(m, FQ)]
 

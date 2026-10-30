@@ -53,10 +53,14 @@ if Student:
     if Student.startswith("http"):
         torch.hub.download_url_to_file(Student, "student.pt"); Student = "student.pt"
     sd = torch.load(Student, map_location="cpu")
-    missing, unexpected = model.load_state_dict({k: v.float() for k, v in sd.items()}, strict=False)
-    assert not unexpected and all(k.startswith("bb.") for k in missing), (unexpected[:3], missing[:3])
-    model.eval()
-    print("student:", replaced, "plain convolutions,", len(sd), "tensors loaded", flush=True)
+    own = model.state_dict()
+    Deferred = not all(k in own and own[k].shape == v.shape for k, v in sd.items())  # a v4-shape checkpoint
+    def load_student():
+        missing, unexpected = model.load_state_dict({k: v.float() for k, v in sd.items()}, strict=False)
+        assert not unexpected and all(k.startswith("bb.") for k in missing), (unexpected[:3], missing[:3])
+        model.eval()
+        print("student:", replaced, "plain convolutions,", len(sd), "tensors loaded", "(after the v4 changes)" if Deferred else "", flush=True)
+    if not Deferred: load_student()
 # Rewritten for Qualcomm's NPU: no deformable convolution or grid_sample, nothing above 4
 # dimensions (see birefnet_npu_rewrites.py; checked against the original on the owner's photos).
 sys.path.insert(0, __import__("os").path.dirname(__file__))
@@ -66,6 +70,7 @@ print("attention layout:", Attention, flush=True)
 if V4 is not None:
     import v4
     print("v4 options:", sorted(v4.apply(model, Side, BBSide, V4)), "backbone", BBSide, "mask", Side, flush=True)
+    if Student and Deferred: load_student()
 elif BBSide != Side:
     import hybrid
     hybrid.apply(model, Side, BBSide, HybridMode)

@@ -84,13 +84,13 @@ def attention_forward_heads(self, x, mask=None):
     """The same window attention one head at a time, in 3 dimensions: no reshape or transpose of
     q, k, v or the attention map (on the 7 Gen 1 NPU those layout shuffles cost about a fifth of
     the whole model at int8). Heads are channel slices of qkv, as in the original; the outputs are
-    concatenated in head order. Batch of one (num_windows == b_), the app's only use."""
+    concatenated in head order. Batch of one adds no reshape at all (the app's case); bigger batches
+    (training) reshape only for the shifted-window mask."""
     b_, n, c = x.shape
     heads, d = self.num_heads, c // self.num_heads
     qkv = self.qkv(x)                                                  # (b_, n, 3c)
     bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(n, n, heads)
-    if mask is not None:
-        assert mask.shape[0] == b_, (mask.shape, b_)
+    nw = mask.shape[0] if mask is not None else b_
     outs = []
     for h in range(heads):
         q = qkv[:, :, h * d:(h + 1) * d] * self.scale
@@ -98,7 +98,10 @@ def attention_forward_heads(self, x, mask=None):
         v = qkv[:, :, 2 * c + h * d:2 * c + (h + 1) * d]
         attn = torch.bmm(q, k.transpose(1, 2)) + bias[:, :, h].unsqueeze(0)
         if mask is not None:
-            attn = attn + mask
+            if nw == b_:  # batch of one: the phone's graph, no reshape
+                attn = attn + mask
+            else:  # training batches: the same mask for every photo
+                attn = (attn.view(b_ // nw, nw, n, n) + mask.unsqueeze(0)).view(b_, n, n)
         outs.append(torch.bmm(self.softmax(attn), v))
     return self.proj_drop(self.proj(torch.cat(outs, dim=-1)))
 

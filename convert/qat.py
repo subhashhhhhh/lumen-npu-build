@@ -44,10 +44,10 @@ def plain_student(model, dilate):
     return n
 
 
-def npu_graph(model):
+def npu_graph(model, attention="4d"):
     """The rewrites birefnet_lite.py applies before converting (all exact)."""
     import birefnet_npu_rewrites, swin_v69
-    birefnet_npu_rewrites.apply(model)
+    birefnet_npu_rewrites.apply(model, attention)
     birefnet_npu_rewrites.split_wide_convs(model)
     swin_v69.apply(model)
     return model

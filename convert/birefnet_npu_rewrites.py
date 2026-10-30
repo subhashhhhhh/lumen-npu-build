@@ -80,6 +80,29 @@ def attention_forward(self, x, mask=None):
     return self.proj_drop(self.proj(x))
 
 
+def attention_forward_heads(self, x, mask=None):
+    """The same window attention one head at a time, in 3 dimensions: no reshape or transpose of
+    q, k, v or the attention map (on the 7 Gen 1 NPU those layout shuffles cost about a fifth of
+    the whole model at int8). Heads are channel slices of qkv, as in the original; the outputs are
+    concatenated in head order. Batch of one (num_windows == b_), the app's only use."""
+    b_, n, c = x.shape
+    heads, d = self.num_heads, c // self.num_heads
+    qkv = self.qkv(x)                                                  # (b_, n, 3c)
+    bias = self.relative_position_bias_table[self.relative_position_index.view(-1)].view(n, n, heads)
+    if mask is not None:
+        assert mask.shape[0] == b_, (mask.shape, b_)
+    outs = []
+    for h in range(heads):
+        q = qkv[:, :, h * d:(h + 1) * d] * self.scale
+        k = qkv[:, :, c + h * d:c + (h + 1) * d]
+        v = qkv[:, :, 2 * c + h * d:2 * c + (h + 1) * d]
+        attn = torch.bmm(q, k.transpose(1, 2)) + bias[:, :, h].unsqueeze(0)
+        if mask is not None:
+            attn = attn + mask
+        outs.append(torch.bmm(self.softmax(attn), v))
+    return self.proj_drop(self.proj(torch.cat(outs, dim=-1)))
+
+
 def image2patches(image, grid_h=2, grid_w=2, patch_ref=None, transformation=None):
     """'b c (hg h) (wg w) -> b (c hg wg) h w' (the decoder's only use) in 4 dimensions."""
     if patch_ref is not None:
@@ -128,13 +151,16 @@ def split_wide_convs(model, budget=6912):
     return n
 
 
-def apply(model):
+def apply(model, attention="4d"):
+    """attention: "4d" (heads batched in 4 dimensions) or "heads" (one head at a time, no layout
+    shuffles). Both exact."""
     module = sys.modules[type(model).__module__]
     assert not getattr(module.config, "SDPA_enabled", False) if hasattr(module, "config") else True
     module.window_partition = window_partition
     module.window_reverse = window_reverse
     module.image2patches = image2patches
-    type(next(m for m in model.modules() if type(m).__name__ == "WindowAttention")).forward = attention_forward
+    type(next(m for m in model.modules() if type(m).__name__ == "WindowAttention")).forward = (
+        {"4d": attention_forward, "heads": attention_forward_heads}[attention])
     # The distilled student has no deformable convolutions left (plain ones instead): nothing to swap.
     deform = next((m for m in model.modules() if type(m).__name__ == "DeformableConv2d"), None)
     if deform is not None:

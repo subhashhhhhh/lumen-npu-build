@@ -26,6 +26,8 @@ Student = sys.argv[3] if len(sys.argv) > 3 else ""
 # Dilate: the 7x7 plain convolutions' dilation (v3). The deformable 7x7s sampled 6-10 px off-grid
 # (p99); a plain 7x7 reaches 3 px, dilation d reaches 3d. Same weight shape, so v2 loads as is.
 Dilate = int(sys.argv[4]) if len(sys.argv) > 4 else 1
+# Attention layout: "4d" (default) or "heads" (one head at a time, no layout shuffles; faster on the NPU).
+Attention = sys.argv[5] if len(sys.argv) > 5 else "4d"
 if Student:
     class PlainConv(torch.nn.Module):
         def __init__(self, deform):
@@ -53,7 +55,8 @@ if Student:
 # dimensions (see birefnet_npu_rewrites.py; checked against the original on the owner's photos).
 sys.path.insert(0, __import__("os").path.dirname(__file__))
 import birefnet_npu_rewrites
-birefnet_npu_rewrites.apply(model)
+birefnet_npu_rewrites.apply(model, Attention)
+print("attention layout:", Attention, flush=True)
 # The decoder's 960-3072-channel convolutions as input-channel slices (exact): their weights fit the
 # Snapdragon 7 Gen 1 / 8 Gen 1 NPU's on-chip memory.
 print("split convolutions:", birefnet_npu_rewrites.split_wide_convs(model), flush=True)

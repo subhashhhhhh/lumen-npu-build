@@ -28,6 +28,10 @@ Student = sys.argv[3] if len(sys.argv) > 3 else ""
 Dilate = int(sys.argv[4]) if len(sys.argv) > 4 else 1
 # Attention layout: "4d" (default) or "heads" (one head at a time, no layout shuffles; faster on the NPU).
 Attention = sys.argv[5] if len(sys.argv) > 5 else "4d"
+# Split resolution (hybrid.py): the backbone on a bb_side copy, the decoder's image references and the
+# mask at Side. mode: tail (no new weights) or patches (full-size patches everywhere; needs training).
+BBSide = int(sys.argv[6]) if len(sys.argv) > 6 and sys.argv[6] else Side
+HybridMode = sys.argv[7] if len(sys.argv) > 7 else "tail"
 if Student:
     class PlainConv(torch.nn.Module):
         def __init__(self, deform):
@@ -57,6 +61,10 @@ sys.path.insert(0, __import__("os").path.dirname(__file__))
 import birefnet_npu_rewrites
 birefnet_npu_rewrites.apply(model, Attention)
 print("attention layout:", Attention, flush=True)
+if BBSide != Side:
+    import hybrid
+    hybrid.apply(model, Side, BBSide, HybridMode)
+    print("split resolution: backbone", BBSide, "decoder and mask", Side, "mode", HybridMode, flush=True)
 # The decoder's 960-3072-channel convolutions as input-channel slices (exact): their weights fit the
 # Snapdragon 7 Gen 1 / 8 Gen 1 NPU's on-chip memory.
 print("split convolutions:", birefnet_npu_rewrites.split_wide_convs(model), flush=True)
